@@ -46,6 +46,6 @@ export const DEFAULT_POLICY = Object.freeze({
   actions: {
     // Posting comments or reviews to the repository host.
     post: false,
-    merge: { enabled: false },
+    merge: { enabled: false, disqualifying: ["blocker", "should-fix"], rules: [] },
   },
 });

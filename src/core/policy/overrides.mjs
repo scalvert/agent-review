@@ -29,6 +29,8 @@ const RULES = {
   "escalation.categories": { kind: "addOnly" },
   "actions.post": { kind: "atMost", rank: (b) => (b ? 1 : 0) },
   "actions.merge.enabled": { kind: "atMost", rank: (b) => (b ? 1 : 0) },
+  "actions.merge.disqualifying": { kind: "addOnly" },
+  // actions.merge.rules has no entry: rules come only from the trusted policy.
 };
 
 function leaves(obj, prefix = "") {

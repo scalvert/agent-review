@@ -18,7 +18,10 @@ import {
   trustedPolicy,
   POLICY_FILE,
 } from "../index.mjs";
-import { renderError, renderInbox, renderNext } from "./render.mjs";
+import { renderEligibility, renderError, renderInbox, renderNext } from "./render.mjs";
+import { githubFacts } from "../adapters/github.mjs";
+import { npmDependencyChanges } from "../adapters/npm.mjs";
+import { activeRound, dryRunExecutor, evaluateEligibility, localFacts, prepareMerge } from "../index.mjs";
 
 class UsageError extends Error {}
 
@@ -116,6 +119,42 @@ const COMMANDS = {
     summary: "Record what became of a reported finding. A needs-judgment finding is a person's call.",
     options: { finding: { type: "string" }, as: { type: "string" }, note: { type: "string" } },
     run: (o, h) => h.review().dispose({ finding: need(o, "finding"), as: need(o, "as"), note: o.note ?? null, actor: h.actor(), opId: o["op-id"] }),
+  },
+  "review classify": {
+    summary: "Classify the change as a whole, such as deps-patch or feature. Evidence for the merge policy, never permission.",
+    options: { category: { type: "string" }, probability: { type: "string" }, rationale: { type: "string" }, "classifier-model": { type: "string" }, "classifier-family": { type: "string" }, head: { type: "string" } },
+    run: (o, h) =>
+      h.review().classify({
+        category: need(o, "category"),
+        probability: Number(need(o, "probability")),
+        rationale: o.rationale ?? null,
+        classifier: { model: need(o, "classifier-model"), family: o["classifier-family"] ?? null },
+        head: h.head(need(o, "head")),
+        actor: h.actor(),
+        opId: o["op-id"],
+      }),
+  },
+  "eligibility check": {
+    summary: "Decide whether the reviewed change may merge under the policy: eligible, blocked or escalate, with every reason. Never merges.",
+    options: { pr: { type: "string" }, facts: { type: "string" }, target: { type: "string" } },
+    readOnly: true,
+    run: (o, h) => evaluateEligibility({ state: h.review().read(), facts: h.facts(o.facts) }),
+  },
+  "merge dry-run": {
+    summary: "Decide eligibility, recheck it from fresh facts, and show what a merge would do. Never merges.",
+    options: { pr: { type: "string" }, facts: { type: "string" }, "recheck-facts": { type: "string" }, target: { type: "string" } },
+    readOnly: true,
+    run: (o, h) => {
+      const review = h.review();
+      const eligibility = evaluateEligibility({ state: review.read(), facts: h.facts(o.facts) });
+      return prepareMerge({
+        eligibility,
+        recheck: () => evaluateEligibility({ state: review.read(), facts: h.facts(o["recheck-facts"] ?? o.facts) }),
+        executor: dryRunExecutor,
+        repo: o.repo,
+        number: o.pr ?? o.key,
+      });
+    },
   },
   "review next": {
     summary: "What the review needs next, and who it waits on.",
@@ -219,6 +258,23 @@ export function main(argv, { env = process.env, stdout = process.stdout, stderr 
         if (cmd.noRef) throw new Error("internal: command has no review");
         return openReview(h.root(), { repo: need(o, "repo"), key: need(o, "key") });
       },
+      // Facts for eligibility: from a file, or fresh from GitHub plus the
+      // local repository. Read again on every call, so a recheck is real.
+      facts: (file) => {
+        if (file) return readJson(file);
+        if (!o.pr) throw new UsageError("give --pr <number> to read facts from GitHub, or --facts <file>");
+        const host = githubFacts({ repo: need(o, "repo"), number: o.pr });
+        const round = activeRound(h.review().read());
+        if (!round) return { ...host, mergeBase: null, policyDigest: null, dependencyChanges: null };
+        const git = h.git();
+        let local;
+        try {
+          local = localFacts({ git, round, targetRef: o.target ?? `origin/${host.target.ref}`, head: host.head });
+        } catch (e) {
+          throw new UsageError(`${e.message}. Fetch the pull request first: git fetch origin pull/${o.pr}/head`);
+        }
+        return { ...host, mergeBase: local.mergeBase, policyDigest: local.policyDigest, dependencyChanges: npmDependencyChanges(git, local.mergeBase, host.head) };
+      },
     };
     if (o.json && o.text) throw new UsageError("use --json or --text, not both");
     textOut = o.text || (!o.json && Boolean(stdout.isTTY));
@@ -229,6 +285,7 @@ export function main(argv, { env = process.env, stdout = process.stdout, stderr 
       const text = mutation ? `${result.changed ? "recorded" : "no change (already recorded)"}\n${renderNext(out.next)}`
         : name === "review next" ? renderNext(out)
         : name === "inbox" ? renderInbox(out)
+        : name === "eligibility check" ? renderEligibility(out)
         : JSON.stringify(out, null, 2);
       stdout.write(`${text}\n`);
     } else stdout.write(`${JSON.stringify(out, null, 2)}\n`);

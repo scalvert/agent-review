@@ -15,6 +15,7 @@ import { digestOf } from "../digest.mjs";
 import { matchPaths } from "../glob.mjs";
 import { resolveDepth } from "../policy/depth.mjs";
 import { applyOverrides } from "../policy/overrides.mjs";
+import { CATEGORIES } from "../policy/defaults.mjs";
 import { trustedPolicy } from "../policy/trust.mjs";
 import { CONFLICT } from "../store/errors.mjs";
 import { openLog } from "../store/event-log.mjs";
@@ -370,5 +371,25 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
     }, { opId });
   }
 
-  return { log, read, start, recordRun, acceptGap, advance, decide, merge, report, resolveEscalation, dispose, coverageReasons, reportPlan };
+  // Classify the change as a whole, such as deps-patch or feature. A
+  // classification is evidence for the merge policy, never permission.
+  function classify({ category, probability, rationale = null, classifier, head, actor, opId }) {
+    checkActor(actor);
+    if (!CATEGORIES.includes(category)) invalid(`category must be one of ${CATEGORIES.join(", ")}, got ${JSON.stringify(category)}`);
+    if (typeof probability !== "number" || !(probability >= 0 && probability <= 1)) invalid(`probability must be from 0 to 1, got ${JSON.stringify(probability)}`);
+    checkModel(classifier?.model, "classifier.model");
+    return mutate((state) => {
+      const r = liveRound(state, { statuses: ["reviewing", "verifying", "reported"] });
+      checkHead(r, head);
+      if (r.policy.resolved.evidence.decision.includes("rationale") && !(typeof rationale === "string" && rationale.trim())) {
+        refuse("the classification was not recorded", [reason("decision-field", "rationale is required by policy evidence.decision")]);
+      }
+      const c = r.classification;
+      if (c && c.category === category && c.probability === probability && c.rationale === rationale && c.classifier.model === classifier.model) return [];
+      const fam = classifier.family ?? familyOf(classifier.model);
+      return [{ type: "change.classified", actor, data: { round: r.round, category, probability, rationale, classifier: { model: classifier.model, family: fam } } }];
+    }, { opId });
+  }
+
+  return { log, read, start, recordRun, acceptGap, advance, decide, merge, report, resolveEscalation, dispose, classify, coverageReasons, reportPlan };
 }

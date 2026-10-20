@@ -4,7 +4,7 @@ import { LEGACY_IMPORTED } from "../store/legacy-v1.mjs";
 import { WorkflowError, UNKNOWN_EVENT } from "./errors.mjs";
 
 // Bump when the state shape changes, so cached snapshots are rebuilt.
-export const REDUCER_VERSION = "review/2";
+export const REDUCER_VERSION = "review/3";
 
 export const initialState = () => ({
   legacy: [],
@@ -39,7 +39,11 @@ export function reduce(state, e) {
         gaps: {},
         report: null,
         invalidated: null,
+        classification: null,
       };
+      break;
+    case "change.classified":
+      current(s, d.round).classification = { category: d.category, probability: d.probability, rationale: d.rationale, classifier: d.classifier, actor: e.actor, at: e.at };
       break;
     case "review.invalidated":
       current(s, d.round).status = "invalidated";

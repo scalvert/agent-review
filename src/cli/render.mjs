@@ -46,6 +46,17 @@ export function renderInbox(items) {
   return items.map((i) => `${i.repo} ${i.key}: ${i.ask}${i.escalation ? ` (${i.escalation})` : ""}`).join("\n");
 }
 
+export function renderEligibility(e) {
+  // Name the rule only when it decided the outcome, so a blocked result does
+  // not read as if the rule blocked it.
+  const lines = [`${e.outcome}${e.outcome === "eligible" && e.provenance.rule ? ` (rule ${e.provenance.rule})` : ""}`];
+  for (const r of e.reasons) {
+    lines.push(`  ${r.effect === "blocked" ? "blocks" : "for a person"}: ${r.message}`);
+    for (const miss of r.rules ?? []) lines.push(`    rule ${miss.rule}: ${miss.why.join("; ")}`);
+  }
+  return lines.join("\n");
+}
+
 export function renderError(e) {
   const reasons = e.reasons ?? e.errors ?? [];
   return [`refused: ${e.message.split("\n")[0]}`, ...reasons.map((r) => `  - ${r.path ? `${r.path}: ` : ""}${r.message}`)].join("\n");

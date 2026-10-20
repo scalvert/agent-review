@@ -9,7 +9,8 @@ const FINDING_FIELDS = ["file", "line", "precondition", "scenario", "evidence"];
 const DECISION_FIELDS = ["rationale"];
 
 const t = {
-  object: (fields) => ({ kind: "object", fields }),
+  object: (fields, { required = [] } = {}) => ({ kind: "object", fields, required }),
+  login: () => ({ kind: "login" }),
   enumOf: (values, { nullable = false } = {}) => ({ kind: "enum", values, nullable }),
   int: (min, max) => ({ kind: "int", min, max }),
   prob: () => ({ kind: "prob" }),
@@ -51,7 +52,31 @@ export const V1 = t.object({
   actions: t.object({
     post: t.bool(),
     merge: t.object({
-      enabled: t.literal(false, "merge actions are not supported by this version of the harness"),
+      // Lets the harness decide merge eligibility. Nothing merges unless a
+      // merge executor is also configured, and none ships with the harness.
+      enabled: t.bool(),
+      // Reported findings at these severities block a merge until disposed.
+      disqualifying: t.list(t.enumOf(["blocker", "should-fix", "nit"])),
+      rules: t.list(
+        t.object(
+          {
+            name: t.name(),
+            // The change must be classified as one of these.
+            categories: t.list(t.enumOf(CATEGORIES)),
+            // The pull request's author must be one of these accounts.
+            authors: t.list(t.login()),
+            // Every commit must carry a signature the host verified.
+            requireVerifiedCommits: t.bool(),
+            // Every changed path must match one of these.
+            paths: t.list(t.glob()),
+            // "patch": every dependency change must be a semver patch bump.
+            dependencies: t.enumOf(["patch"], { nullable: true }),
+            minApprovals: t.int(0, 10),
+          },
+          { required: ["name", "categories", "authors", "paths"] },
+        ),
+        { unique: false },
+      ),
     }),
   }),
 });
@@ -68,6 +93,10 @@ function check(spec, value, path, errors) {
         const sub = path ? `${path}.${key}` : key;
         if (!(key in spec.fields)) errors.push({ path: sub, message: `is not a known setting; known: ${Object.keys(spec.fields).join(", ")}` });
         else check(spec.fields[key], value[key], sub, errors);
+      }
+      for (const key of spec.required ?? []) {
+        if (!(key in value)) errors.push({ path: path ? `${path}.${key}` : key, message: "is required" });
+        else if (Array.isArray(value[key]) && value[key].length === 0) errors.push({ path: path ? `${path}.${key}` : key, message: "must not be empty" });
       }
       return;
     }
@@ -86,6 +115,9 @@ function check(spec, value, path, errors) {
       return;
     case "bool":
       if (typeof value !== "boolean") errors.push({ path: at, message: `must be true or false, got ${show(value)}` });
+      return;
+    case "login":
+      if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$/.test(value)) errors.push({ path: at, message: `must be an account name such as "dependabot[bot]", got ${show(value)}` });
       return;
     case "name":
       if (typeof value !== "string" || !NAME.test(value)) errors.push({ path: at, message: `must be a lowercase name such as "security", got ${show(value)}` });
@@ -117,6 +149,15 @@ function check(spec, value, path, errors) {
 export function validateV1(value) {
   const errors = [];
   check(V1, value, "", errors);
+  // Merge eligibility with no rule would have nothing to match.
+  const merge = value?.actions?.merge;
+  if (merge?.enabled === true && !(Array.isArray(merge.rules) && merge.rules.length)) {
+    errors.push({ path: "actions.merge.rules", message: "is required when actions.merge.enabled is true" });
+  }
+  const names = (merge?.rules ?? []).map((r) => r?.name);
+  names.forEach((n, i) => {
+    if (n && names.indexOf(n) !== i) errors.push({ path: `actions.merge.rules[${i}].name`, message: `repeats ${show(n)}` });
+  });
   return errors;
 }
 

@@ -77,14 +77,15 @@ test("fail closed: every invalid setting is reported, with its path", () => {
       "escalation.paths[0]",
       "escalation.categories[0]",
       "actions.post",
-      "actions.merge.enabled",
       "actions.deploy",
+      "actions.merge.rules",
     ]),
   );
 });
 
-test("merge actions cannot be turned on yet", () => {
-  assert.throws(() => parse({ version: 1, actions: { merge: { enabled: true } } }), (e) => e.code === POLICY_INVALID && /not supported/.test(e.errors[0].message));
+test("turning merge eligibility on needs at least one rule", () => {
+  assert.throws(() => parse({ version: 1, actions: { merge: { enabled: true } } }), (e) => e.code === POLICY_INVALID && e.errors[0].path === "actions.merge.rules" && /is required/.test(e.errors[0].message));
+  assert.throws(() => parse({ version: 1, actions: { merge: { rules: [{ name: "a", categories: ["docs"], authors: ["x"], paths: ["*"] }, { name: "a", categories: ["docs"], authors: ["x"], paths: ["*"] }] } } }), (e) => e.errors[0].path === "actions.merge.rules[1].name");
 });
 
 test("the old unversioned file reads as version 1, with a warning that says how to update it", () => {

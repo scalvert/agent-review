@@ -61,7 +61,27 @@
         "merge": {
           "type": "object",
           "additionalProperties": false,
-          "properties": { "enabled": { "const": false, "description": "Merge actions are not supported yet." } }
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Lets the harness decide merge eligibility. The harness ships only a dry-run executor." },
+            "disqualifying": { "type": "array", "uniqueItems": true, "items": { "enum": ["blocker", "should-fix", "nit"] } },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "categories", "authors", "paths"],
+                "properties": {
+                  "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+                  "categories": { "type": "array", "minItems": 1, "items": { "enum": ["docs", "tests", "deps-patch", "deps-other", "feature", "refactor", "policy", "security-sensitive"] } },
+                  "authors": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+                  "requireVerifiedCommits": { "type": "boolean" },
+                  "paths": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+                  "dependencies": { "enum": ["patch", null] },
+                  "minApprovals": { "type": "integer", "minimum": 0, "maximum": 10 }
+                }
+              }
+            }
+          }
         }
       }
     }
