@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/scalvert/agent-review/schema/policy-v1.schema.json",
+  "title": "agent-review policy, version 1",
+  "description": "Review policy for a repository, read from agent-review.json at the target branch's tip. The harness validates it strictly; this schema is for editors.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultDepth": { "enum": ["quick", "standard", "deep", null], "description": "The depth when nobody chooses one. A default, not a floor." },
+        "minDepth": { "enum": ["quick", "standard", "deep"], "description": "The lowest depth any review may run at." },
+        "deepPaths": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 }, "description": "A changed path matching one of these globs makes the review deep." },
+        "requiredLenses": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" } },
+        "minReviewers": { "type": "integer", "minimum": 1, "maximum": 20 }
+      }
+    },
+    "independence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minFamilies": { "type": "integer", "minimum": 1, "maximum": 5, "description": "Distinct model families across the panel." },
+        "verifier": { "enum": ["model", "family"], "description": "How a verifier must differ from the finding's author." },
+        "secondVerifierForBlockers": { "type": "boolean" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "finding": { "type": "array", "uniqueItems": true, "items": { "enum": ["file", "line", "precondition", "scenario", "evidence"] } },
+        "decision": { "type": "array", "uniqueItems": true, "items": { "enum": ["rationale"] } }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "report": { "type": "number", "minimum": 0, "maximum": 1, "description": "Report a finding at or above this verification probability. Model probabilities are not calibrated." },
+        "classify": { "type": "number", "minimum": 0, "maximum": 1, "description": "Below this classification probability, a person decides." }
+      }
+    },
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "paths": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "categories": { "type": "array", "uniqueItems": true, "items": { "enum": ["docs", "tests", "deps-patch", "deps-other", "feature", "refactor", "policy", "security-sensitive"] } }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "post": { "type": "boolean", "description": "Whether the harness may post comments or reviews." },
+        "merge": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "enabled": { "const": false, "description": "Merge actions are not supported yet." } }
+        }
+      }
+    }
+  }
+}
