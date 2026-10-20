@@ -8,7 +8,7 @@ This repository is private while the core takes shape. Nothing is published to n
 
 ## Status
 
-Under construction. The first piece is the state store: locked, append-only review logs that parallel agents can write to without losing updates.
+Under construction. The first piece is the [state store](docs/store.md): locked, append-only review logs that parallel agents can write to without losing updates, with a copy-only import of v1 ledgers.
 
 ## Develop
 
