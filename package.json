@@ -1,0 +1,22 @@
+{
+  "name": "agent-review",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A policy-driven code review harness that people and AI agents run through the same commands.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
