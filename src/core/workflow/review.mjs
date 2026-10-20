@@ -18,7 +18,7 @@ import { applyOverrides } from "../policy/overrides.mjs";
 import { trustedPolicy } from "../policy/trust.mjs";
 import { CONFLICT } from "../store/errors.mjs";
 import { openLog } from "../store/event-log.mjs";
-import { DECISION_KINDS, MODEL, RUNNER_KINDS, RUN_STATUSES, defaultFamily } from "./kinds.mjs";
+import { DECISION_KINDS, DISPOSITIONS, MODEL, RUNNER_KINDS, RUN_STATUSES, defaultFamily } from "./kinds.mjs";
 import { FORBIDDEN, INVALID, REFUSED, STALE, WorkflowError } from "./errors.mjs";
 import { REDUCER_VERSION, initialState, reduce } from "./reducer.mjs";
 
@@ -355,5 +355,20 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
     }, { opId });
   }
 
-  return { log, read, start, recordRun, acceptGap, advance, decide, merge, report, resolveEscalation, coverageReasons, reportPlan };
+  // Record what became of a reported finding. A finding triaged
+  // needs-judgment is a person's call, so only a person can dispose of it.
+  function dispose({ finding, as, note = null, actor, opId }) {
+    checkActor(actor);
+    if (!DISPOSITIONS.includes(as)) invalid(`disposition must be one of ${DISPOSITIONS.join(", ")}, got ${JSON.stringify(as)}`);
+    return mutate((state) => {
+      const r = liveRound(state, { statuses: ["reported"] });
+      const f = state.findings.find((x) => x.id === finding && x.round === r.round);
+      if (!f || !r.report.reported.includes(finding)) refuse(`${finding} is not a reported finding in round ${r.round}`, [reason("not-reported", `reported findings: ${r.report.reported.join(", ") || "none"}`)]);
+      if (f.decisions["finding-triage"]?.at(-1)?.label === "needs-judgment") checkActor(actor, { human: true });
+      if (f.disposition?.as === as && f.disposition?.note === note) return [];
+      return [{ type: "finding.disposed", actor, data: { round: r.round, finding, as, note } }];
+    }, { opId });
+  }
+
+  return { log, read, start, recordRun, acceptGap, advance, decide, merge, report, resolveEscalation, dispose, coverageReasons, reportPlan };
 }

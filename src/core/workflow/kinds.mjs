@@ -7,6 +7,11 @@ export const DECISION_KINDS = {
   "finding-origin": ["introduced", "missed", "pre-existing"],
 };
 
+// What became of a reported finding. fixed and accepted mean it was real;
+// wrong and intended mean it was not a problem; not-worth-it means real but
+// not worth acting on.
+export const DISPOSITIONS = ["fixed", "accepted", "wrong", "intended", "not-worth-it"];
+
 export const RUN_STATUSES = ["ok", "failed", "skipped"];
 // executed: the harness ran the model itself and saw its output.
 // attested: a caller says it ran the model. The harness cannot check that.

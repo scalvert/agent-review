@@ -73,9 +73,13 @@ export function next(state) {
     return { status: "verifying", ...base, waitingOn: "agent", action: { do: "report" }, human };
   }
 
-  // reported
-  if (open.length) return { status: "reported", ...base, waitingOn: "human", action: { do: "resolve", escalations: open.map((x) => x.id) }, human, report: r.report };
-  return { status: "complete", ...base, waitingOn: null, action: null, human: [], report: r.report };
+  // reported: the review is done once no escalation is open. Judgment calls
+  // on reported findings still wait on a person, and are listed for them.
+  const calls = state.findings
+    .filter((f) => f.round === r.round && r.report.reported.includes(f.id) && !f.disposition && f.decisions["finding-triage"]?.at(-1)?.label === "needs-judgment")
+    .map((f) => ({ finding: f.id, code: "needs-judgment", ask: `${f.id}: ${f.title} (${f.file ?? "no file"}${f.line ? `:${f.line}` : ""}) needs your call` }));
+  if (open.length) return { status: "reported", ...base, waitingOn: "human", action: { do: "resolve", escalations: open.map((x) => x.id) }, human: [...human, ...calls], report: r.report };
+  return { status: "complete", ...base, waitingOn: calls.length ? "human" : null, action: calls.length ? { do: "dispose", findings: calls.map((c) => c.finding) } : null, human: calls, report: r.report };
 }
 
 // reviews: [{ ref: { repo, key }, state }]
@@ -84,14 +88,6 @@ export function inbox(reviews) {
   for (const { ref, state } of reviews) {
     const n = next(state);
     for (const h of n.human) items.push({ repo: ref.repo, key: ref.key, round: n.round ?? null, ...h });
-    const r = activeRound(state);
-    if (r && r.status !== "invalidated") {
-      for (const f of state.findings.filter((x) => x.round === r.round && !x.duplicateOf)) {
-        if (f.decisions["finding-triage"]?.at(-1)?.label === "needs-judgment" && r.report?.reported.includes(f.id)) {
-          items.push({ repo: ref.repo, key: ref.key, round: r.round, finding: f.id, code: "needs-judgment", ask: `${f.id}: ${f.title} (${f.file ?? "no file"}${f.line ? `:${f.line}` : ""}) needs your call` });
-        }
-      }
-    }
   }
   return items;
 }

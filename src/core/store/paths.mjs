@@ -1,6 +1,7 @@
 // Where review state lives. The core takes an explicit state root; callers
 // decide it. defaultStateRoot() is the portable default, with no personal or
 // tool-specific locations.
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { StoreError, INVALID } from "./errors.mjs";
@@ -19,6 +20,8 @@ export function keyFile(key) {
     .join("");
 }
 
+export const decodeKeyFile = (name) => decodeURIComponent(name);
+
 export function checkRef({ repo, key } = {}) {
   if (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
     throw new StoreError(INVALID, `repo must be owner/name, got ${JSON.stringify(repo)}`);
@@ -36,6 +39,20 @@ export function reviewPaths(root, ref) {
   const [owner, name] = repo.split("/");
   const dir = join(root, "v2", owner, name, keyFile(key));
   return { dir, log: join(dir, "events.jsonl"), snapshot: join(dir, "snapshot.json"), lock: join(dir, "lock") };
+}
+
+// Every v2 review under a state root, as { repo, key }.
+export function listReviews(root) {
+  const v2 = join(root, "v2");
+  if (!existsSync(v2)) return [];
+  const dirs = (p) => readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  return dirs(v2).flatMap((owner) =>
+    dirs(join(v2, owner)).flatMap((name) =>
+      dirs(join(v2, owner, name))
+        .filter((k) => existsSync(join(v2, owner, name, k, "events.jsonl")))
+        .map((k) => ({ repo: `${owner}/${name}`, key: decodeKeyFile(k) })),
+    ),
+  );
 }
 
 // Where a v1 ledger for the same review would be, under a v1 state root.

@@ -9,7 +9,11 @@
     "node": ">=22"
   },
   "exports": {
-    ".": "./src/index.mjs"
+    ".": "./src/index.mjs",
+    "./adapters/git": "./src/adapters/git.mjs"
+  },
+  "bin": {
+    "agent-review": "src/cli/main.mjs"
   },
   "files": [
     "src",
