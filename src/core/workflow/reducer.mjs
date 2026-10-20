@@ -1,0 +1,86 @@
+// Review state, rebuilt from the event log. Every event is applied the same
+// way whether a person or an agent wrote it.
+import { LEGACY_IMPORTED } from "../store/legacy-v1.mjs";
+import { WorkflowError, UNKNOWN_EVENT } from "./errors.mjs";
+
+export const REDUCER_VERSION = "review/1";
+
+export const initialState = () => ({
+  legacy: [],
+  round: 0,
+  rounds: {},
+  findings: [],
+  escalations: [],
+});
+
+const current = (s, round) => s.rounds[round];
+
+export function reduce(state, e) {
+  const s = state;
+  const d = e.data;
+  switch (e.type) {
+    case LEGACY_IMPORTED:
+      s.legacy = s.legacy.filter((l) => l.path !== d.source.path);
+      s.legacy.push({ path: d.source.path, digest: d.source.digest, rounds: d.rounds, findings: d.findings, seq: e.seq });
+      break;
+    case "review.started":
+      s.round = d.round;
+      s.rounds[d.round] = {
+        round: d.round,
+        status: "reviewing",
+        startedAt: e.at,
+        startedBy: e.actor,
+        binding: d.binding,
+        policy: d.policy,
+        depth: d.depth,
+        plan: d.plan,
+        runs: {},
+        gaps: {},
+        report: null,
+        invalidated: null,
+      };
+      break;
+    case "review.invalidated":
+      current(s, d.round).status = "invalidated";
+      current(s, d.round).invalidated = { reason: d.reason, changed: d.changed, at: e.at };
+      break;
+    case "run.recorded":
+      current(s, d.round).runs[d.slot] = { ...d, at: e.at, actor: e.actor };
+      break;
+    case "gap.accepted":
+      current(s, d.round).gaps[d.slot] = { reason: d.reason, actor: e.actor, at: e.at };
+      break;
+    case "finding.added":
+      s.findings.push({ ...d.finding, id: d.id, round: d.round, author: d.author, duplicateOf: null, decisions: {} });
+      break;
+    case "finding.merged":
+      for (const id of d.ids) s.findings.find((f) => f.id === id).duplicateOf = d.into;
+      break;
+    case "decision.recorded": {
+      const f = s.findings.find((x) => x.id === d.finding);
+      (f.decisions[d.kind] ??= []).push({ label: d.label, probability: d.probability, rationale: d.rationale, verifier: d.verifier, actor: e.actor, at: e.at, seq: e.seq });
+      break;
+    }
+    case "review.advanced":
+      current(s, d.round).status = d.to;
+      break;
+    case "review.reported":
+      current(s, d.round).status = "reported";
+      current(s, d.round).report = { ...d.report, at: e.at };
+      break;
+    case "escalation.raised":
+      s.escalations.push({ id: d.id, round: d.round, code: d.code, message: d.message, path: d.path ?? null, finding: d.finding ?? null, status: "open", raisedAt: e.at, resolution: null });
+      break;
+    case "escalation.resolved": {
+      const x = s.escalations.find((y) => y.id === d.id);
+      x.status = d.decision === "approve" ? "approved" : "rejected";
+      x.resolution = { decision: d.decision, reason: d.reason, actor: e.actor, at: e.at };
+      break;
+    }
+    default:
+      // Fail closed: an event this version does not know might be one that
+      // matters, such as an invalidation, so the review cannot be read.
+      throw new WorkflowError(UNKNOWN_EVENT, `event ${e.seq} has type ${JSON.stringify(e.type)}, which this version of the harness does not know; upgrade the harness to read this review`);
+  }
+  return s;
+}
