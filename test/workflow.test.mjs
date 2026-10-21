@@ -397,6 +397,62 @@ test("the round cap: an agent is refused past it, a person can go past it, and v
   importLegacyV1(old.log, ref, v1);
   const fresh = gitRepo({ version: 1 });
   assert.throws(() => old.start({ git: fresh.adapter, targetRef: "main", head: "feature", actor: AGENT }), refused(REFUSED, ["round-cap"]));
+  assert.equal(next(old.read()).roundsSoFar, 3, "next shows the rounds so far");
+});
+
+test("the round cap counts new code: a restart because the target's policy changed is not a round", () => {
+  const { repo, review } = setup({ version: 1, review: { maxRounds: 2 } });
+  repo.write("src/a.js", "two\n");
+  repo.commit("two");
+  review.start({ git: repo.adapter, targetRef: "main", head: "feature", lenses: ["security"], actor: AGENT });
+  // The policy on main changes; the head does not.
+  repo.git("checkout", "-q", "main");
+  repo.write("agent-review.json", `${JSON.stringify({ version: 1, review: { maxRounds: 2, minReviewers: 2 } })}\n`);
+  repo.commit("stricter policy");
+  repo.git("checkout", "-q", "feature");
+  const s = review.start({ git: repo.adapter, targetRef: "main", head: "feature", lenses: ["security"], actor: AGENT }).state;
+  assert.equal(s.round, 3);
+  assert.equal(s.rounds[3].pastCap, false);
+  assert.match(s.rounds[2].invalidated.reason, /policyDigest/);
+  // New code after that is past the cap.
+  repo.write("src/a.js", "three\n");
+  repo.commit("three");
+  assert.throws(() => review.start({ git: repo.adapter, targetRef: "main", head: "feature", lenses: ["security"], actor: AGENT }), refused(REFUSED, ["round-cap"]));
+});
+
+test("a finding reported in an earlier round can be disposed in a later one", () => {
+  const { repo, review, head } = setup({ version: 1 });
+  happyPanel(review, head);
+  for (const [kind, label] of [["finding-verification", "confirmed"], ["finding-severity", "should-fix"], ["finding-origin", "introduced"], ["finding-triage", "agent-fixable"]]) {
+    review.decide({ finding: "F1", kind, label, probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  }
+  review.decide({ finding: "F2", kind: "finding-verification", label: "refuted", probability: 0.1, rationale: "r", verifier: { model: OPUS }, head, actor: AGENT });
+  review.report({ actor: AGENT });
+  repo.write("src/a.js", "fixed\n");
+  repo.commit("fix");
+  review.start({ git: repo.adapter, targetRef: "main", head: "feature", lenses: ["security"], actor: AGENT });
+  // Mid-review in round 2, the round-1 finding turns out fixed.
+  const s = review.dispose({ finding: "F1", as: "fixed", actor: AGENT }).state;
+  assert.equal(s.findings.find((f) => f.id === "F1").disposition.as, "fixed");
+  // Clearing it is still a person's call, and an unreported finding still cannot be disposed.
+  assert.throws(() => review.dispose({ finding: "F1", as: "wrong", actor: AGENT }), (e) => e.code === "workflow/forbidden");
+  assert.throws(() => review.dispose({ finding: "F2", as: "fixed", actor: AGENT }), refused(REFUSED, ["not-reported"]));
+});
+
+test("sparse lists and URLs that are not https URLs are refused before anything is written", () => {
+  const { review, head } = setup({ version: 1 });
+  const sparse = new Array(2);
+  sparse[0] = { file: "src/b.js", line: 2 };
+  assert.throws(() => review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, findings: [finding(1, { instances: sparse })] }), refused(REFUSED, ["finding-field"]));
+  assert.throws(() => review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, findings: [finding(1, { instances: [{ file: "   " }] })] }), refused(REFUSED, ["finding-field"]));
+  const holes = new Array(1);
+  assert.throws(() => review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, findings: holes }), (e) => e.code === WORKFLOW_INVALID);
+  review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, findings: [finding(1)] });
+  for (const url of ["https://", "https://a b", "http://example.com", new URL("https://example.com/x")]) {
+    assert.throws(() => review.link({ finding: "F1", thread: "T1", url, actor: AGENT }), (e) => e.code === WORKFLOW_INVALID, String(url));
+  }
+  review.link({ finding: "F1", thread: "T1", url: "https://github.com/acme/widgets/pull/7#discussion_r1", actor: AGENT });
+  assert.equal(review.read().findings[0].thread.url, "https://github.com/acme/widgets/pull/7#discussion_r1");
 });
 
 test("findings keep their class, instances and axiom, and bad shapes are refused", () => {

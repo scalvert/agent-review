@@ -25,7 +25,7 @@
 | `review classify` | Records the change's category, such as `deps-patch`. Merge eligibility needs it, and only a person can change it once it is set. |
 | `review report` | Writes the report once every finding has what it needs |
 | `review resolve` | Approves or rejects an escalation (people only) |
-| `review dispose` | Records what became of a reported finding. A `needs-judgment` finding is a person's call. `--note-file <file>`, or `-` for stdin, reads the note from a file, so text copied from a pull request never passes through a shell string. |
+| `review dispose` | Records what became of a reported finding, from this round or an earlier one. A `needs-judgment` finding is a person's call, and so is clearing a disqualifying one as `wrong`, `intended` or `not-worth-it`. `--note-file <file>`, or `-` for stdin, reads the note from a file, so text copied from a pull request never passes through a shell string. |
 | `review link` | Records the review thread on the host that carries a finding |
 | `eligibility check` | Decides whether the change may merge: `eligible`, `blocked` or `escalate`, with every reason. It never merges. |
 | `merge dry-run` | Decides eligibility, rechecks it from fresh facts, and shows what a merge would do. It never merges. |

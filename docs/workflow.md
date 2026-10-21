@@ -12,7 +12,7 @@ new head, merge base or policy on the next start -> round invalidated -> new rou
 
 | Operation | Needs | Records |
 |---|---|---|
-| `start` | A target ref and a head. A new round past `review.maxRounds` (counting v1 rounds) needs a person and `pastCap` | The round's binding: target commit, head, merge base, policy digests, depth, and the reviewer slots |
+| `start` | A target ref and a head. A new round on a new head past `review.maxRounds` (counting v1 rounds) needs a person and `pastCap` | The round's binding: target commit, head, merge base, policy digests, depth, and the reviewer slots |
 | `recordRun` | `reviewing`, the bound head, a planned slot | One slot's run: `ok`, `failed` or `skipped`, with model, family, runner and findings. Each finding may also carry `class` (kebab-case), `instances` (other `{ file, line }` places with the same mistake) and `axiom`. |
 | `acceptGap` | A person; a slot that did not run successfully | That the panel may go ahead without the slot, with a reason |
 | `advance` | Every slot ok or gap-accepted, `minReviewers` and `minFamilies` met | The move to `verifying` |

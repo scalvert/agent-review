@@ -228,8 +228,13 @@ function need(o, name) {
   return o[name];
 }
 
+// A file the caller named that cannot be read is a usage error, exit 2.
 function readText(path) {
-  return path === "-" ? readFileSync(0, "utf8") : readFileSync(path, "utf8");
+  try {
+    return path === "-" ? readFileSync(0, "utf8") : readFileSync(path, "utf8");
+  } catch (e) {
+    throw new UsageError(`${path}: cannot read (${e.code ?? e.message})`);
+  }
 }
 
 function readJson(path) {

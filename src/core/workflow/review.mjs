@@ -47,6 +47,17 @@ function checkModel(model, what) {
 
 export const activeRound = (state) => (state.round ? state.rounds[state.round] : null);
 
+// A string that parses as an https URL with a host, and has no whitespace.
+function isHttpsUrl(url) {
+  if (typeof url !== "string" || /\s/.test(url)) return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && u.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function liveRound(state, { statuses }) {
   const r = activeRound(state);
   if (!r) refuse("no review has started", [reason("not-started", "start a review first")]);
@@ -121,10 +132,13 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
         events.push({ type: "review.invalidated", actor, data: { round: r.round, reason: `${changed.join(", ")} changed`, changed } });
       }
       const round = state.round + 1;
-      // Rounds so far, counting v1 rounds this review was imported with.
+      // Rounds so far, counting v1 rounds this review was imported with. The
+      // cap is on reviews of new code: a restart at the same head, because
+      // the target's policy or the merge base moved, is not one.
       const prior = state.round + state.legacy.reduce((n, l) => n + (l.rounds ?? 0), 0);
       const cap = policy.review.maxRounds;
-      if (prior >= cap) {
+      const newCode = !r || r.binding.head !== binding.head;
+      if (newCode && prior >= cap) {
         if (!pastCap) {
           refuse(`this change has had ${prior} review rounds; the policy allows ${cap}`, [
             reason("round-cap", `later rounds mostly find older problems, not new ones; consider stepping back from the approach. A person can start another round with --past-cap`, { rounds: prior, cap }),
@@ -140,7 +154,7 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
           binding,
           policy: { source: tp.trusted.source, effectiveDigest: resolved.effectiveDigest, overrides: resolved.overrides, warnings: tp.trusted.warnings, resolved: policy },
           depth,
-          pastCap: prior >= cap,
+          pastCap: newCode && prior >= cap,
           plan: {
             slots,
             requirements: { minReviewers: policy.review.minReviewers, minFamilies: policy.independence.minFamilies, requiredLenses: policy.review.requiredLenses },
@@ -167,6 +181,8 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
     else if (typeof why !== "string" || !why.trim()) invalid(`a ${status} run needs a reason`);
     if (status !== "ok" && findings.length) invalid(`a ${status} run cannot have findings`);
     if (!Array.isArray(findings)) invalid("findings must be a list");
+    // A sparse list has holes that forEach skips and JSON cannot hold.
+    if (Object.keys(findings).length !== findings.length) invalid("findings must not have empty slots");
 
     return mutate((state) => {
       const r = liveRound(state, { statuses: ["reviewing"] });
@@ -196,7 +212,9 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
         const bad = (field, why) => problems.push(reason("finding-field", `finding ${i + 1}: ${field} ${why}`, { index: i, field }));
         if (f.class != null && !(typeof f.class === "string" && /^[a-z][a-z0-9-]*$/.test(f.class))) bad("class", "must be a kebab-case name, such as missing-await");
         if (f.axiom != null && !(typeof f.axiom === "string" && f.axiom.trim())) bad("axiom", "must be a nonempty string");
-        if (f.instances != null && !(Array.isArray(f.instances) && f.instances.every((x) => x && typeof x.file === "string" && x.file && (x.line == null || (Number.isInteger(x.line) && x.line > 0))))) {
+        const place = (x) => x && typeof x === "object" && typeof x.file === "string" && x.file.trim().length > 0 && (x.line == null || (Number.isInteger(x.line) && x.line > 0));
+        // Array.from turns holes into undefined, so a sparse list fails here.
+        if (f.instances != null && !(Array.isArray(f.instances) && Array.from(f.instances).every(place))) {
           bad("instances", "must be a list of { file, line }");
         }
       });
@@ -409,18 +427,24 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
     }, { opId });
   }
 
-  // Record what became of a reported finding. A finding triaged
-  // needs-judgment is a person's call, so only a person can dispose of it.
+  // Record what became of a reported finding, from this round or an earlier
+  // one: a follow-up round is often where an older finding turns out fixed.
+  // A finding triaged needs-judgment is a person's call, so only a person can
+  // dispose of it.
   function dispose({ finding, as, note = null, actor, opId }) {
     checkActor(actor);
     if (!DISPOSITIONS.includes(as)) invalid(`disposition must be one of ${DISPOSITIONS.join(", ")}, got ${JSON.stringify(as)}`);
     return mutate((state) => {
-      const r = liveRound(state, { statuses: ["reported"] });
-      const f = state.findings.find((x) => x.id === finding && x.round === r.round);
+      if (!activeRound(state)) refuse("no review has started", [reason("not-started", "start a review first")]);
+      const f = state.findings.find((x) => x.id === finding);
+      const r = f ? state.rounds[f.round] : null;
       // Reported findings, and disputed findings a person said are real.
-      const approved = state.escalations.some((x) => x.round === r.round && x.finding === finding && x.status === "approved");
-      const open = r.report.reported.includes(finding) || (r.report.escalated.includes(finding) && approved);
-      if (!f || !open) refuse(`${finding} is not a reported finding in round ${r.round}`, [reason("not-reported", `reported findings: ${r.report.reported.join(", ") || "none"}`)]);
+      const approved = state.escalations.some((x) => x.round === f?.round && x.finding === finding && x.status === "approved");
+      const open = Boolean(r?.report) && (r.report.reported.includes(finding) || (r.report.escalated.includes(finding) && approved));
+      if (!open) {
+        const all = Object.values(state.rounds).flatMap((x) => x.report?.reported ?? []);
+        refuse(`${finding} is not a reported finding`, [reason("not-reported", `reported findings: ${all.join(", ") || "none"}`)]);
+      }
       if (f.decisions["finding-triage"]?.at(-1)?.label === "needs-judgment") checkActor(actor, { human: true });
       // Clearing a finding that would block a merge overrides an
       // independent verification, so only a person can do it.
@@ -428,7 +452,7 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       const sev = f.decisions["finding-severity"]?.at(-1)?.label ?? null;
       if (CLEARING.includes(as) && (sev === null || disqualifying.includes(sev))) checkActor(actor, { human: true });
       if (f.disposition?.as === as && f.disposition?.note === note) return [];
-      return [{ type: "finding.disposed", actor, data: { round: r.round, finding, as, note } }];
+      return [{ type: "finding.disposed", actor, data: { round: f.round, finding, as, note } }];
     }, { opId });
   }
 
@@ -460,7 +484,7 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
   function link({ finding, thread, url = null, actor, opId }) {
     checkActor(actor);
     if (typeof thread !== "string" || !thread.trim()) invalid("link needs a thread ID");
-    if (url != null && !/^https:\/\//.test(url)) invalid(`url must be an https URL, got ${JSON.stringify(url)}`);
+    if (url != null && !isHttpsUrl(url)) invalid(`url must be an https URL, got ${JSON.stringify(url)}`);
     return mutate((state) => {
       const f = state.findings.find((x) => x.id === finding);
       if (!f) refuse(`no finding ${JSON.stringify(finding)}`, [reason("unknown-finding", `finding ${finding} is not in this review`)]);
