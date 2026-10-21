@@ -48,6 +48,7 @@ Every setting is optional, except `version`. The JSON Schema in `schema/policy-v
 | `review.deepPaths` | `[]` | A changed path that matches one of these globs makes the review deep. |
 | `review.requiredLenses` | `["correctness"]` | Lenses every review runs. |
 | `review.minReviewers` | `1` | Reviewer runs the panel needs. |
+| `review.maxRounds` | `3` | Review rounds per change, counting imported v1 rounds. Later rounds mostly find older problems, not new ones. Only a person can start a round past this, with `--past-cap`. |
 | `independence.minFamilies` | `2` | Distinct model families across the panel. |
 | `independence.verifier` | `family` | A verifier must differ from the finding's author by `model` or by `family`. |
 | `independence.secondVerifierForBlockers` | `false` | Whether each blocker needs a second, independent verifier. |
@@ -79,6 +80,7 @@ A run can tighten the policy, for example with command-line flags. It can never 
 | Lists: `deepPaths`, `requiredLenses`, `evidence.*`, `escalation.*` | Add entries |
 | Floors and counts: `minDepth`, `minReviewers`, `minFamilies`, `verifier`, `secondVerifierForBlockers`, `thresholds.classify` | Raise them |
 | `thresholds.report` | Lower it, so that more findings are reported |
+| `review.maxRounds` | Lower it. Going past it is a person's call, not a setting. |
 | `actions.post`, `actions.merge.enabled` | Turn them off |
 | `actions.merge.disqualifying` | Add severities |
 | `actions.merge.rules` | Nothing. Rules come only from the trusted policy. |

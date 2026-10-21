@@ -12,8 +12,8 @@ new head, merge base or policy on the next start -> round invalidated -> new rou
 
 | Operation | Needs | Records |
 |---|---|---|
-| `start` | A target ref and a head | The round's binding: target commit, head, merge base, policy digests, depth, and the reviewer slots |
-| `recordRun` | `reviewing`, the bound head, a planned slot | One slot's run: `ok`, `failed` or `skipped`, with model, family, runner and findings |
+| `start` | A target ref and a head. A new round past `review.maxRounds` (counting v1 rounds) needs a person and `pastCap` | The round's binding: target commit, head, merge base, policy digests, depth, and the reviewer slots |
+| `recordRun` | `reviewing`, the bound head, a planned slot | One slot's run: `ok`, `failed` or `skipped`, with model, family, runner and findings. Each finding may also carry `class` (kebab-case), `instances` (other `{ file, line }` places with the same mistake) and `axiom`. |
 | `acceptGap` | A person; a slot that did not run successfully | That the panel may go ahead without the slot, with a reason |
 | `advance` | Every slot ok or gap-accepted, `minReviewers` and `minFamilies` met | The move to `verifying` |
 | `merge` | Duplicates with no decisions yet | That findings are duplicates of a primary |
@@ -22,6 +22,7 @@ new head, merge base or policy on the next start -> round invalidated -> new rou
 | `resolveEscalation` | A person; an open escalation in the current round | Approve or reject, with a reason |
 | `dispose` | `reported`; a reported finding, or a disputed one a person approved. A person, if the finding is triaged `needs-judgment`, or if it clears (`wrong`, `intended`, `not-worth-it`) a finding at a disqualifying or missing severity | `fixed`, `accepted`, `wrong`, `intended` or `not-worth-it`, with an optional note |
 | `classify` | `reviewing`, `verifying` or `reported`; the bound head. A person, to change the category once it is set | The change's category, such as `deps-patch`, with a probability. Evidence for the merge policy, never permission. |
+| `link` | A finding in any round | The host's review thread that carries it, such as a pull request comment, with an optional https URL |
 
 `next(state)` returns the next required step, who it waits on, and what a person needs to look at. `inbox(reviews)` lists the same person items across reviews: escalations, failed slots, and reported findings triaged `needs-judgment` with no disposition yet. Each comes with a one-line ask. A review is `complete` once no escalation is open. Judgment calls on its findings still show as waiting on a person until someone disposes of them.
 

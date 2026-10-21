@@ -16,6 +16,8 @@ const RULES = {
   "review.deepPaths": { kind: "addOnly" },
   "review.requiredLenses": { kind: "addOnly" },
   "review.minReviewers": { kind: "atLeast", rank: (n) => n },
+  // A run may lower the cap, never raise it: going past it is a person's call.
+  "review.maxRounds": { kind: "atMost", rank: (n) => n },
   "independence.minFamilies": { kind: "atLeast", rank: (n) => n },
   "independence.verifier": { kind: "atLeast", rank: rank(VERIFIER_INDEPENDENCE) },
   "independence.secondVerifierForBlockers": { kind: "atLeast", rank: (b) => (b ? 1 : 0) },

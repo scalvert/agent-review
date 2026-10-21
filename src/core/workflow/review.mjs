@@ -92,7 +92,7 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
 
   // Bind a round to the exact revisions and policy, or confirm the bound
   // one. Idempotent: the same inputs return the existing round.
-  function start({ git, targetRef, head, lenses = [], depth: depthFlag = null, overrides = null, userDepth = null, suggestedDepth = "standard", actor, opId }) {
+  function start({ git, targetRef, head, lenses = [], depth: depthFlag = null, overrides = null, userDepth = null, suggestedDepth = "standard", pastCap = false, actor, opId }) {
     checkActor(actor);
     const tp = trustedPolicy({ git, targetRef, head });
     const resolved = applyOverrides(tp.trusted, overrides ?? {}, { source: "overrides" });
@@ -121,6 +121,17 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
         events.push({ type: "review.invalidated", actor, data: { round: r.round, reason: `${changed.join(", ")} changed`, changed } });
       }
       const round = state.round + 1;
+      // Rounds so far, counting v1 rounds this review was imported with.
+      const prior = state.round + state.legacy.reduce((n, l) => n + (l.rounds ?? 0), 0);
+      const cap = policy.review.maxRounds;
+      if (prior >= cap) {
+        if (!pastCap) {
+          refuse(`this change has had ${prior} review rounds; the policy allows ${cap}`, [
+            reason("round-cap", `later rounds mostly find older problems, not new ones; consider stepping back from the approach. A person can start another round with --past-cap`, { rounds: prior, cap }),
+          ]);
+        }
+        checkActor(actor, { human: true });
+      }
       events.push({
         type: "review.started",
         actor,
@@ -129,6 +140,7 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
           binding,
           policy: { source: tp.trusted.source, effectiveDigest: resolved.effectiveDigest, overrides: resolved.overrides, warnings: tp.trusted.warnings, resolved: policy },
           depth,
+          pastCap: prior >= cap,
           plan: {
             slots,
             requirements: { minReviewers: policy.review.minReviewers, minFamilies: policy.independence.minFamilies, requiredLenses: policy.review.requiredLenses },
@@ -180,13 +192,31 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
           const ok = k === "line" ? Number.isInteger(v) && v > 0 : typeof v === "string" && v.trim().length > 0;
           if (!ok) problems.push(reason("finding-field", `finding ${i + 1}: ${k} is required by policy evidence.finding`, { index: i, field: k }));
         }
+        // Optional fields that reports and history use. Checked when present.
+        const bad = (field, why) => problems.push(reason("finding-field", `finding ${i + 1}: ${field} ${why}`, { index: i, field }));
+        if (f.class != null && !(typeof f.class === "string" && /^[a-z][a-z0-9-]*$/.test(f.class))) bad("class", "must be a kebab-case name, such as missing-await");
+        if (f.axiom != null && !(typeof f.axiom === "string" && f.axiom.trim())) bad("axiom", "must be a nonempty string");
+        if (f.instances != null && !(Array.isArray(f.instances) && f.instances.every((x) => x && typeof x.file === "string" && x.file && (x.line == null || (Number.isInteger(x.line) && x.line > 0))))) {
+          bad("instances", "must be a list of { file, line }");
+        }
       });
       if (problems.length) refuse("findings are missing required evidence", problems);
 
       const events = [{ type: "run.recorded", actor, data: record }];
       let n = state.findings.length;
       for (const f of findings) {
-        const finding = { title: f.title, file: f.file ?? null, line: f.line ?? null, precondition: f.precondition ?? null, scenario: f.scenario ?? null, evidence: f.evidence ?? null, lens: planned.lens };
+        const finding = {
+          title: f.title,
+          file: f.file ?? null,
+          line: f.line ?? null,
+          precondition: f.precondition ?? null,
+          scenario: f.scenario ?? null,
+          evidence: f.evidence ?? null,
+          class: f.class ?? null,
+          instances: (f.instances ?? []).map((x) => ({ file: x.file, line: x.line ?? null })),
+          axiom: f.axiom ?? null,
+          lens: planned.lens,
+        };
         events.push({ type: "finding.added", actor, data: { round: r.round, id: `F${++n}`, author: { slot, model, family: fam }, finding } });
       }
       return events;
@@ -425,5 +455,19 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
     }, { opId });
   }
 
-  return { log, read, start, recordRun, acceptGap, advance, decide, merge, report, resolveEscalation, dispose, classify, coverageReasons, reportPlan };
+  // Record the host's review thread that carries a finding, such as a GitHub
+  // pull request comment, so replies in that thread can be traced back to it.
+  function link({ finding, thread, url = null, actor, opId }) {
+    checkActor(actor);
+    if (typeof thread !== "string" || !thread.trim()) invalid("link needs a thread ID");
+    if (url != null && !/^https:\/\//.test(url)) invalid(`url must be an https URL, got ${JSON.stringify(url)}`);
+    return mutate((state) => {
+      const f = state.findings.find((x) => x.id === finding);
+      if (!f) refuse(`no finding ${JSON.stringify(finding)}`, [reason("unknown-finding", `finding ${finding} is not in this review`)]);
+      if (f.thread?.id === thread && f.thread.url === url) return [];
+      return [{ type: "finding.linked", actor, data: { finding, thread, url } }];
+    }, { opId });
+  }
+
+  return { log, read, start, recordRun, acceptGap, advance, decide, merge, report, resolveEscalation, dispose, classify, link, coverageReasons, reportPlan };
 }

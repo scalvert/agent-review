@@ -31,6 +31,7 @@ export const V1 = t.object({
     deepPaths: t.list(t.glob()),
     requiredLenses: t.list(t.name()),
     minReviewers: t.int(1, 20),
+    maxRounds: t.int(1, 20),
   }),
   independence: t.object({
     minFamilies: t.int(1, 5),

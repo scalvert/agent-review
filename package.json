@@ -1,6 +1,6 @@
 {
   "name": "agent-review",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A policy-driven code review harness that people and AI agents run through the same commands.",
   "type": "module",
@@ -13,7 +13,7 @@
     "./adapters/git": "./src/adapters/git.mjs",
     "./adapters/github": "./src/adapters/github.mjs",
     "./adapters/npm": "./src/adapters/npm.mjs",
-    "./cli": "./src/cli/main.mjs"
+    "./cli": "./src/cli/run.mjs"
   },
   "bin": {
     "agent-review": "src/cli/main.mjs"

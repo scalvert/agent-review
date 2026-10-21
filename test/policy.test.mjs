@@ -132,6 +132,8 @@ test("overrides may only tighten; each weakening is named and none is applied", 
   const offPost = parse({ version: 1 });
   assert.throws(() => applyOverrides(offPost, { actions: { post: true } }), fails(WEAKENING, ["actions.post"]));
   assert.throws(() => applyOverrides(base, { version: 1 }), fails(POLICY_INVALID));
+  assert.equal(applyOverrides(base, { review: { maxRounds: 1 } }).policy.review.maxRounds, 1, "a run may lower the round cap");
+  assert.throws(() => applyOverrides(base, { review: { maxRounds: 9 } }), fails(WEAKENING, ["review.maxRounds"]), "but not raise it");
   assert.throws(() => applyOverrides(base, { review: { minDepth: "max" } }), fails(POLICY_INVALID, ["review.minDepth"]));
 });
 

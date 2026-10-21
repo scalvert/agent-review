@@ -372,6 +372,58 @@ test("next asks for the change's classification when merge eligibility is on", (
   assert.equal(next(review.read()).action.do, "report");
 });
 
+test("the round cap: an agent is refused past it, a person can go past it, and v1 rounds count", () => {
+  const { repo, review } = setup({ version: 1, review: { maxRounds: 2 } });
+  const again = (msg, actor = AGENT, pastCap = false) => {
+    repo.write("src/a.js", `${msg}\n`);
+    repo.commit(msg);
+    return review.start({ git: repo.adapter, targetRef: "main", head: "feature", lenses: ["security"], pastCap, actor });
+  };
+  again("two");
+  assert.throws(() => again("three"), refused(REFUSED, ["round-cap"]));
+  assert.throws(() => again("three-b", AGENT, true), (e) => e.code === "workflow/forbidden", "--past-cap is a person's call");
+  const s = again("three-c", HUMAN, true).state;
+  assert.equal(s.round, 3);
+  assert.equal(s.rounds[3].pastCap, true);
+  assert.equal(s.rounds[2].status, "invalidated");
+
+  // A review imported from a v1 ledger with 3 rounds is already at the default cap.
+  const root = stateRoot();
+  const ref = { repo: "acme/old", key: "1" };
+  const v1 = legacyV1Path(root, ref);
+  mkdirSync(join(v1, ".."), { recursive: true });
+  writeFileSync(v1, JSON.stringify({ schema: "scalvert.review/v1", repo: ref.repo, key: ref.key, rounds: [{ round: 1 }, { round: 2 }, { round: 3 }], findings: [] }));
+  const old = openReview(root, ref);
+  importLegacyV1(old.log, ref, v1);
+  const fresh = gitRepo({ version: 1 });
+  assert.throws(() => old.start({ git: fresh.adapter, targetRef: "main", head: "feature", actor: AGENT }), refused(REFUSED, ["round-cap"]));
+});
+
+test("findings keep their class, instances and axiom, and bad shapes are refused", () => {
+  const { review, head } = setup({ version: 1 });
+  assert.throws(
+    () => review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, findings: [finding(1, { class: "Missing Await", instances: [{ line: 3 }] })] }),
+    refused(REFUSED, ["finding-field", "finding-field"]),
+  );
+  review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, findings: [finding(1, { class: "missing-await", instances: [{ file: "src/b.js", line: 9 }, { file: "src/c.js" }], axiom: "T3" })] });
+  const [f] = review.read().findings;
+  assert.equal(f.class, "missing-await");
+  assert.deepEqual(f.instances, [{ file: "src/b.js", line: 9 }, { file: "src/c.js", line: null }]);
+  assert.equal(f.axiom, "T3");
+  assert.equal(f.thread, null);
+});
+
+test("a finding can be linked to the host's review thread", () => {
+  const { review, head } = setup({ version: 1 });
+  happyPanel(review, head);
+  assert.throws(() => review.link({ finding: "F9", thread: "PRRT_1", actor: AGENT }), refused(REFUSED, ["unknown-finding"]));
+  assert.throws(() => review.link({ finding: "F1", thread: "PRRT_1", url: "http://x", actor: AGENT }), (e) => e.code === WORKFLOW_INVALID);
+  review.link({ finding: "F1", thread: "PRRT_1", url: "https://github.com/acme/widgets/pull/7#discussion_r1", actor: AGENT });
+  assert.equal(review.link({ finding: "F1", thread: "PRRT_1", url: "https://github.com/acme/widgets/pull/7#discussion_r1", actor: AGENT }).changed, false);
+  const f = review.read().findings.find((x) => x.id === "F1");
+  assert.deepEqual([f.thread.id, f.thread.url], ["PRRT_1", "https://github.com/acme/widgets/pull/7#discussion_r1"]);
+});
+
 test("actors are required and must say whether they are a person or an agent", () => {
   const { review, head } = setup({ version: 1 });
   assert.throws(() => review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head }), refused(WORKFLOW_INVALID));

@@ -17,7 +17,8 @@
         "minDepth": { "enum": ["quick", "standard", "deep"], "description": "The lowest depth any review may run at." },
         "deepPaths": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 }, "description": "A changed path matching one of these globs makes the review deep." },
         "requiredLenses": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" } },
-        "minReviewers": { "type": "integer", "minimum": 1, "maximum": 20 }
+        "minReviewers": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "maxRounds": { "type": "integer", "minimum": 1, "maximum": 20, "description": "Review rounds per change. Only a person can start one past this." }
       }
     },
     "independence": {

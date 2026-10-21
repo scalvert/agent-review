@@ -74,7 +74,10 @@ test("the full flow on the command line, with a refused step along the way", () 
 
   // It is the person's call: an agent cannot settle it, a person can.
   assert.equal(run(["review", "dispose", ...K, "--finding", "F1", "--as", "wrong"]).json.error.code, "workflow/forbidden");
-  const settled = run(["review", "dispose", ...K, "--finding", "F1", "--as", "accepted", "--note", "real; fix in a follow-up"], { actor: "human:steve" });
+  assert.equal(run(["review", "dispose", ...K, "--finding", "F1", "--as", "accepted", "--note", "a", "--note-file", "-"], { actor: "human:steve", input: "b" }).status, 2, "one note, not two");
+  // A note copied from a pull request comes in on stdin, and is kept as written.
+  const note = "real; fix in a follow-up $(touch pwned)";
+  const settled = run(["review", "dispose", ...K, "--finding", "F1", "--as", "accepted", "--note-file", "-"], { actor: "human:steve", input: `${note}\n` });
   assert.equal(settled.status, 0, settled.stderr);
   assert.equal(settled.json.next.waitingOn, null);
   assert.deepEqual(run(["inbox"], { actor: null }).json, []);
@@ -82,6 +85,7 @@ test("the full flow on the command line, with a refused step along the way", () 
 
   const status = run(["review", "status", ...K], { actor: null });
   assert.equal(status.json.findings[0].decisions["finding-verification"][0].rationale, "reproduced with a failing test");
+  assert.equal(status.json.findings[0].disposition.note, note);
 });
 
 test("a person takes over: an agent cannot accept a gap or resolve an escalation, a person can, and the agent resumes", () => {
