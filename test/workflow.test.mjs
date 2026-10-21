@@ -424,6 +424,23 @@ test("the round cap: an agent is refused past it, a person can go past it, and v
   assert.equal(next(old.read()).roundsSoFar, 3, "next shows the rounds so far");
 });
 
+test("the round cap counts one v1 round per head: v1 retries at the same head are not rounds", () => {
+  const root = stateRoot();
+  const ref = { repo: "acme/retried", key: "7" };
+  const v1 = legacyV1Path(root, ref);
+  mkdirSync(join(v1, ".."), { recursive: true });
+  // v1 started a round on every run: two reviews of head a, one of head b.
+  const rounds = [{ round: 1, head: "a" }, { round: 2, head: "a" }, { round: 3, head: "b" }];
+  writeFileSync(v1, JSON.stringify({ schema: "scalvert.review/v1", repo: ref.repo, key: ref.key, rounds, findings: [] }));
+  const old = openReview(root, ref);
+  importLegacyV1(old.log, ref, v1);
+  assert.equal(next(old.read()).roundsSoFar, 2);
+  const fresh = gitRepo({ version: 1 });
+  const s = old.start({ git: fresh.adapter, targetRef: "main", head: "feature", actor: AGENT }).state;
+  assert.equal(s.rounds[1].pastCap, false, "two reviewed heads leave room under the default cap of 3");
+  assert.equal(s.legacy[0].rounds, 3, "the imported round count is unchanged");
+});
+
 test("a confirmed finding needs a triage before the report", () => {
   const { review, head } = setup({ version: 1 });
   happyPanel(review, head);

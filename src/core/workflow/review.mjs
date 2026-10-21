@@ -52,6 +52,9 @@ function checkNumber(n, what) {
   if (!Number.isInteger(n) || n < 1) invalid(`${what} must be a number from 1, as the harness shows it, got ${JSON.stringify(n)}`);
 }
 
+// v1 rounds that count toward the round cap: one per head v1 reviewed.
+export const legacyRounds = (state) => state.legacy.reduce((n, l) => n + (l.reviews ?? l.rounds ?? 0), 0);
+
 const candidatesIn = (state, r) => state.findings.filter((f) => f.round === r.round);
 const numbered = (state) => state.findings.filter((f) => f.number !== null).map((f) => f.number);
 const listOf = (ns) => (ns.length ? ns.join(", ") : "none");
@@ -157,8 +160,9 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       const round = state.round + 1;
       // Rounds so far, counting v1 rounds this review was imported with. The
       // cap is on reviews of new code: a restart at the same head, because
-      // the target's policy or the merge base moved, is not one.
-      const prior = state.round + state.legacy.reduce((n, l) => n + (l.rounds ?? 0), 0);
+      // the target's policy or the merge base moved, is not one, and neither
+      // is a v1 retry at a head v1 had already reviewed.
+      const prior = state.round + legacyRounds(state);
       const cap = policy.review.maxRounds;
       const newCode = !r || r.binding.head !== binding.head;
       if (newCode && prior >= cap) {
