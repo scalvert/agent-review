@@ -15,6 +15,7 @@ import {
   next,
   openReview,
   parsePolicy,
+  publicState,
   trustedPolicy,
   POLICY_FILE,
 } from "../index.mjs";
@@ -77,14 +78,14 @@ const COMMANDS = {
     run: (o, h) => h.review().advance({ actor: h.actor(), opId: o["op-id"] }),
   },
   "review merge": {
-    summary: "Mark findings as duplicates of a primary finding.",
-    options: { into: { type: "string" }, ids: { type: "string" } },
-    run: (o, h) => h.review().merge({ into: need(o, "into"), ids: list(need(o, "ids")), actor: h.actor(), opId: o["op-id"] }),
+    summary: "Mark candidates as duplicates of a primary candidate, by candidate number.",
+    options: { into: { type: "string" }, duplicates: { type: "string" } },
+    run: (o, h) => h.review().merge({ into: number(o, "into"), duplicates: numbers(o, "duplicates"), actor: h.actor(), opId: o["op-id"] }),
   },
   "review decide": {
-    summary: "Record a verification, severity, triage or origin decision on a finding.",
+    summary: "Record a verification, severity, triage or origin decision on a candidate, by candidate number.",
     options: {
-      finding: { type: "string" },
+      candidate: { type: "string" },
       kind: { type: "string" },
       label: { type: "string" },
       probability: { type: "string" },
@@ -98,7 +99,7 @@ const COMMANDS = {
       if (o.rationale != null && o["rationale-file"] != null) throw new UsageError("use --rationale or --rationale-file, not both");
       const p = Number(need(o, "probability"));
       return h.review().decide({
-        finding: need(o, "finding"),
+        candidate: number(o, "candidate"),
         kind: need(o, "kind"),
         label: need(o, "label"),
         probability: p,
@@ -121,20 +122,20 @@ const COMMANDS = {
     run: (o, h) => h.review().resolveEscalation({ id: need(o, "escalation"), decision: need(o, "decision"), reason: need(o, "reason"), actor: h.actor(), opId: o["op-id"] }),
   },
   "review dispose": {
-    summary: "Record what became of a reported finding. A needs-judgment finding is a person's call.",
+    summary: "Record what became of a reported finding, by finding number. A needs-judgment finding is a person's call.",
     // --note-file reads the note from a file, or stdin with -, so text copied
     // from a pull request never passes through a shell string.
     options: { finding: { type: "string" }, as: { type: "string" }, note: { type: "string" }, "note-file": { type: "string" } },
     run: (o, h) => {
       if (o.note != null && o["note-file"] != null) throw new UsageError("use --note or --note-file, not both");
       const note = o["note-file"] != null ? readText(o["note-file"]).trim() : (o.note ?? null);
-      return h.review().dispose({ finding: need(o, "finding"), as: need(o, "as"), note, actor: h.actor(), opId: o["op-id"] });
+      return h.review().dispose({ finding: number(o, "finding"), as: need(o, "as"), note, actor: h.actor(), opId: o["op-id"] });
     },
   },
   "review link": {
-    summary: "Record the host's review thread that carries a finding, such as a pull request comment.",
+    summary: "Record the host's review thread that carries a finding, such as a pull request comment, by finding number.",
     options: { finding: { type: "string" }, thread: { type: "string" }, url: { type: "string" } },
-    run: (o, h) => h.review().link({ finding: need(o, "finding"), thread: need(o, "thread"), url: o.url ?? null, actor: h.actor(), opId: o["op-id"] }),
+    run: (o, h) => h.review().link({ finding: number(o, "finding"), thread: need(o, "thread"), url: o.url ?? null, actor: h.actor(), opId: o["op-id"] }),
   },
   "review classify": {
     summary: "Classify the change as a whole, such as deps-patch or feature. Evidence for the merge policy, never permission.",
@@ -179,10 +180,10 @@ const COMMANDS = {
     run: (o, h) => next(h.review().read()),
   },
   "review status": {
-    summary: "The full review state.",
+    summary: "The full review state, with candidates and findings by number.",
     options: {},
     readOnly: true,
-    run: (o, h) => h.review().read(),
+    run: (o, h) => publicState(h.review().read()),
   },
   inbox: {
     summary: "Everything waiting on a person, across reviews.",
@@ -227,6 +228,16 @@ function need(o, name) {
   if (o[name] == null || o[name] === "") throw new UsageError(`--${name} is required`);
   return o[name];
 }
+
+// Candidates and findings are named by the numbers the harness shows: 1, 2,
+// 3. An internal key such as F2 is refused, so it never becomes a habit.
+function toNumber(name, s) {
+  if (/^[1-9][0-9]*$/.test(s)) return Number(s);
+  if (/^F[0-9]+$/i.test(s)) throw new UsageError(`--${name} takes a number as the harness shows it, such as 2, not ${s}`);
+  throw new UsageError(`--${name} takes a number from 1, got ${JSON.stringify(s)}`);
+}
+const number = (o, name) => toNumber(name, need(o, name));
+const numbers = (o, name) => list(need(o, name)).map((s) => toNumber(name, s));
 
 // A file the caller named that cannot be read is a usage error, exit 2.
 function readText(path) {

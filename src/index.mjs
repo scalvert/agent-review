@@ -1,5 +1,5 @@
 // The public entry point.
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 export { canonicalJson, digestOf, sha256 } from "./core/digest.mjs";
 export { StoreError, BUSY, CONFLICT, CORRUPT, INVALID, OP_ID_REUSED } from "./core/store/errors.mjs";
@@ -22,6 +22,7 @@ export { WorkflowError, REFUSED, STALE, INVALID as WORKFLOW_INVALID, FORBIDDEN, 
 export { REDUCER_VERSION, initialState, reduce } from "./core/workflow/reducer.mjs";
 export { openReview, activeRound } from "./core/workflow/review.mjs";
 export { next, inbox } from "./core/workflow/next.mjs";
+export { SECTIONS, placement, numberReport, publicReport, publicState } from "./core/workflow/numbers.mjs";
 
 export { versionChange } from "./core/decide/semver.mjs";
 export { evaluateEligibility, ELIGIBLE, BLOCKED, ESCALATE } from "./core/decide/eligibility.mjs";
