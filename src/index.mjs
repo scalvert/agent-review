@@ -16,3 +16,9 @@ export { PolicyError, parsePolicy, defaultPolicy, NOT_JSON, NO_VERSION, UNSUPPOR
 export { applyOverrides } from "./core/policy/overrides.mjs";
 export { resolveDepth } from "./core/policy/depth.mjs";
 export { trustedPolicy, POLICY_CHANGE } from "./core/policy/trust.mjs";
+
+export { DECISION_KINDS, RUN_STATUSES, RUNNER_KINDS, defaultFamily } from "./core/workflow/kinds.mjs";
+export { WorkflowError, REFUSED, STALE, INVALID as WORKFLOW_INVALID, FORBIDDEN, UNKNOWN_EVENT } from "./core/workflow/errors.mjs";
+export { REDUCER_VERSION, initialState, reduce } from "./core/workflow/reducer.mjs";
+export { openReview, activeRound } from "./core/workflow/review.mjs";
+export { next, inbox } from "./core/workflow/next.mjs";
