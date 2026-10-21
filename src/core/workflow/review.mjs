@@ -414,6 +414,9 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       const sev = f.decisions["finding-severity"]?.at(-1)?.label;
       if (!sev) missing.push(reason("no-severity", `candidate ${f.candidate} is confirmed but has no severity`, c));
       if (!f.decisions["finding-origin"]?.length) missing.push(reason("no-origin", `candidate ${f.candidate} is confirmed but has no origin`, c));
+      // Triage decides who acts on the finding after the report, and no
+      // decision can be recorded once the round is reported.
+      if (!f.decisions["finding-triage"]?.length) missing.push(reason("no-triage", `candidate ${f.candidate} is confirmed but has no triage`, c));
       if (sev === "blocker" && policy.independence.secondVerifierForBlockers && new Set(v.map((x) => x.verifier.model)).size < 2) {
         missing.push(reason("second-verifier", `candidate ${f.candidate} is a blocker; the policy needs a second verifier from a different model`, c));
       }

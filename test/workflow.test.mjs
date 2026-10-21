@@ -424,6 +424,18 @@ test("the round cap: an agent is refused past it, a person can go past it, and v
   assert.equal(next(old.read()).roundsSoFar, 3, "next shows the rounds so far");
 });
 
+test("a confirmed finding needs a triage before the report", () => {
+  const { review, head } = setup({ version: 1 });
+  happyPanel(review, head);
+  for (const [kind, label] of [["finding-verification", "confirmed"], ["finding-severity", "should-fix"], ["finding-origin", "introduced"]]) {
+    review.decide({ candidate: 1, kind, label, probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  }
+  review.decide({ candidate: 2, kind: "finding-verification", label: "refuted", probability: 0.1, rationale: "r", verifier: { model: OPUS }, head, actor: AGENT });
+  assert.throws(() => review.report({ actor: AGENT }), refused(REFUSED, ["no-triage"]));
+  review.decide({ candidate: 1, kind: "finding-triage", label: "agent-fixable", probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  assert.equal(next(review.report({ actor: AGENT }).state).status, "complete");
+});
+
 test("the round cap counts new code: a restart because the target's policy changed is not a round", () => {
   const { repo, review } = setup({ version: 1, review: { maxRounds: 2 } });
   repo.write("src/a.js", "two\n");
