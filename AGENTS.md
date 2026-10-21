@@ -20,5 +20,5 @@
 
 ## Never
 
-- Perform a real merge, publish a package, or make this repository public.
+- Perform a real merge or publish a package to a registry.
 - Put credentials, private repository details or company-internal names in code, tests, fixtures or docs.
