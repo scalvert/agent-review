@@ -4,7 +4,7 @@
 
 - Output is JSON for agents. At a terminal, or with `--text`, it is a few lines for a person. `--json` forces JSON.
 - A refused step exits 1. With JSON output, the reasons go to stderr as `{"error": {code, message, reasons}}`. A usage error exits 2.
-- Every command that changes state needs `--actor human:<name>` or `--actor agent:<runtime>`, or `AGENT_REVIEW_ACTOR`.
+- Every command that changes state needs `--actor human:<name>` or `--actor agent:<runtime>`, or `AGENT_REVIEW_ACTOR`. The actor is declared, not verified: a person-only step refuses `agent:` actors, but the harness cannot prove who typed `human:`. An agent records a `human:` step only for a decision the person made.
 - `--head` takes a ref or a SHA. The harness resolves a ref to its commit, so a run against an old commit is refused.
 - `--target` defaults to the remote's default branch, such as `origin/main`, else `main`. Eligibility reads the policy from the same ref and blocks if it is behind the host.
 - Candidates and findings are named by number. `--candidate <n>` names a reviewer's claim in the current round, numbered 1, 2, 3 in the order the claims were recorded; `merge` and `decide` take it. `--finding <n>` names a finding the report showed; `dispose` and `link` take it. The report numbers its findings in report order, after the numbers earlier rounds used, so a finding keeps its number for the whole review. The event log ties events together with internal keys, but no command takes one and no output shows one. An internal key such as `F2` is a usage error.

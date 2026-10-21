@@ -5,7 +5,7 @@ import { WorkflowError, UNKNOWN_EVENT } from "./errors.mjs";
 import { numberReport } from "./numbers.mjs";
 
 // Bump when the state shape changes, so cached snapshots are rebuilt.
-export const REDUCER_VERSION = "review/5";
+export const REDUCER_VERSION = "review/6";
 
 export const initialState = () => ({
   legacy: [],
@@ -17,13 +17,27 @@ export const initialState = () => ({
 
 const current = (s, round) => s.rounds[round];
 
+// How many v1 rounds reviewed new code. The v1 tools started a round on
+// every run, so a retry at the same head added one; the round cap does not
+// count those (see start). A v1 round with no head counts on its own.
+export function legacyReviews(ledger) {
+  const rounds = Array.isArray(ledger?.rounds) ? ledger.rounds : [];
+  const heads = new Set();
+  let headless = 0;
+  for (const r of rounds) {
+    if (typeof r?.head === "string" && r.head) heads.add(r.head);
+    else headless++;
+  }
+  return heads.size + headless;
+}
+
 export function reduce(state, e) {
   const s = state;
   const d = e.data;
   switch (e.type) {
     case LEGACY_IMPORTED:
       s.legacy = s.legacy.filter((l) => l.path !== d.source.path);
-      s.legacy.push({ path: d.source.path, digest: d.source.digest, rounds: d.rounds, findings: d.findings, seq: e.seq });
+      s.legacy.push({ path: d.source.path, digest: d.source.digest, rounds: d.rounds, reviews: legacyReviews(d.ledger), findings: d.findings, seq: e.seq });
       break;
     case "review.started":
       s.round = d.round;

@@ -4,7 +4,7 @@
 // every finding.
 import { CATEGORIES } from "../policy/defaults.mjs";
 import { publicReport } from "./numbers.mjs";
-import { activeRound } from "./review.mjs";
+import { activeRound, legacyRounds } from "./review.mjs";
 
 // A candidate as a verifier needs it: its number, what it claims and where.
 const candidate = (f) => ({ candidate: f.candidate, title: f.title, file: f.file, line: f.line });
@@ -23,7 +23,7 @@ export function next(state) {
 
   // Rounds so far, with imported v1 rounds, so a caller can see the round
   // cap coming. The cap itself comes from the trusted policy at start.
-  const roundsSoFar = state.round + state.legacy.reduce((n, l) => n + (l.rounds ?? 0), 0);
+  const roundsSoFar = state.round + legacyRounds(state);
   if (!r) {
     return {
       status: "not-started",

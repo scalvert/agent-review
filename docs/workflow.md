@@ -12,13 +12,13 @@ new head, merge base or policy on the next start -> round invalidated -> new rou
 
 | Operation | Needs | Records |
 |---|---|---|
-| `start` | A target ref and a head. A new round on a new head past `review.maxRounds` (counting v1 rounds) needs a person and `pastCap` | The round's binding: target commit, head, merge base, policy digests, depth, and the reviewer slots |
+| `start` | A target ref and a head. A new round on a new head past `review.maxRounds` (counting one v1 round per head v1 reviewed) needs a person and `pastCap` | The round's binding: target commit, head, merge base, policy digests, depth, and the reviewer slots |
 | `recordRun` | `reviewing`, the bound head, a planned slot | One slot's run: `ok`, `failed` or `skipped`, with model, family, runner and findings. Each finding may also carry `class` (kebab-case), `instances` (other `{ file, line }` places with the same mistake) and `axiom`. |
 | `acceptGap` | A person; a slot that did not run successfully | That the panel may go ahead without the slot, with a reason |
 | `advance` | Every slot ok or gap-accepted, `minReviewers` and `minFamilies` met | The move to `verifying` |
 | `merge` | Candidates in this round, as duplicates with no decisions yet | That candidates are duplicates of a primary candidate |
 | `decide` | `verifying`, the bound head, a candidate in this round, a verifier independent of its author | A verification, severity, triage or origin decision |
-| `report` | Every candidate verified; reported candidates with severity and origin; a second verifier on blockers when the policy asks | Reported, dropped and disputed candidates, coverage, and the finding number of each reported or disputed one |
+| `report` | Every candidate verified; reported candidates with severity, origin and triage; a second verifier on blockers when the policy asks | Reported, dropped and disputed candidates, coverage, and the finding number of each reported or disputed one |
 | `resolveEscalation` | A person; an open escalation in the current round | Approve or reject, with a reason |
 | `dispose` | A finding number: a reported finding, or a disputed one a person approved. A person, if the finding is triaged `needs-judgment`, or if it clears (`wrong`, `intended`, `not-worth-it`) a finding at a disqualifying or missing severity | `fixed`, `accepted`, `wrong`, `intended` or `not-worth-it`, with an optional note |
 | `classify` | `reviewing`, `verifying` or `reported`; the bound head. A person, to change the category once it is set | The change's category, such as `deps-patch`, with a probability. Evidence for the merge policy, never permission. |

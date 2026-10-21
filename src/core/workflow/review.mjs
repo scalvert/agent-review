@@ -52,6 +52,9 @@ function checkNumber(n, what) {
   if (!Number.isInteger(n) || n < 1) invalid(`${what} must be a number from 1, as the harness shows it, got ${JSON.stringify(n)}`);
 }
 
+// v1 rounds that count toward the round cap: one per head v1 reviewed.
+export const legacyRounds = (state) => state.legacy.reduce((n, l) => n + (l.reviews ?? l.rounds ?? 0), 0);
+
 const candidatesIn = (state, r) => state.findings.filter((f) => f.round === r.round);
 const numbered = (state) => state.findings.filter((f) => f.number !== null).map((f) => f.number);
 const listOf = (ns) => (ns.length ? ns.join(", ") : "none");
@@ -157,8 +160,9 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       const round = state.round + 1;
       // Rounds so far, counting v1 rounds this review was imported with. The
       // cap is on reviews of new code: a restart at the same head, because
-      // the target's policy or the merge base moved, is not one.
-      const prior = state.round + state.legacy.reduce((n, l) => n + (l.rounds ?? 0), 0);
+      // the target's policy or the merge base moved, is not one, and neither
+      // is a v1 retry at a head v1 had already reviewed.
+      const prior = state.round + legacyRounds(state);
       const cap = policy.review.maxRounds;
       const newCode = !r || r.binding.head !== binding.head;
       if (newCode && prior >= cap) {
@@ -414,6 +418,9 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       const sev = f.decisions["finding-severity"]?.at(-1)?.label;
       if (!sev) missing.push(reason("no-severity", `candidate ${f.candidate} is confirmed but has no severity`, c));
       if (!f.decisions["finding-origin"]?.length) missing.push(reason("no-origin", `candidate ${f.candidate} is confirmed but has no origin`, c));
+      // Triage decides who acts on the finding after the report, and no
+      // decision can be recorded once the round is reported.
+      if (!f.decisions["finding-triage"]?.length) missing.push(reason("no-triage", `candidate ${f.candidate} is confirmed but has no triage`, c));
       if (sev === "blocker" && policy.independence.secondVerifierForBlockers && new Set(v.map((x) => x.verifier.model)).size < 2) {
         missing.push(reason("second-verifier", `candidate ${f.candidate} is a blocker; the policy needs a second verifier from a different model`, c));
       }
