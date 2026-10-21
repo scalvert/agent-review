@@ -1,0 +1,19 @@
+{
+  "$schema": "https://github.com/scalvert/agent-review/schema/policy-v1.schema.json",
+  "version": 1,
+  "review": {
+    "minDepth": "standard",
+    "deepPaths": ["src/auth/**", ".github/workflows/**"],
+    "requiredLenses": ["correctness", "security"],
+    "minReviewers": 2
+  },
+  "independence": {
+    "minFamilies": 2,
+    "verifier": "family",
+    "secondVerifierForBlockers": true
+  },
+  "escalation": {
+    "paths": ["agent-review.json", "package.json", "package-lock.json"],
+    "categories": ["policy", "security-sensitive"]
+  }
+}

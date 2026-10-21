@@ -13,6 +13,7 @@
   },
   "files": [
     "src",
+    "schema",
     "LICENSE",
     "README.md"
   ],
