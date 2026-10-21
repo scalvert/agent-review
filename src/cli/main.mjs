@@ -21,7 +21,7 @@ import { renderEligibility, renderError, renderInbox, renderNext } from "./rende
 import { cliStateRoot } from "./state-root.mjs";
 import { githubFacts } from "../adapters/github.mjs";
 import { npmDependencyChanges } from "../adapters/npm.mjs";
-import { activeRound, dryRunExecutor, evaluateEligibility, localFacts, prepareMerge } from "../index.mjs";
+import { activeRound, dryRunExecutor, evaluateEligibility, importLegacyV1, legacyV1Path, localFacts, prepareMerge } from "../index.mjs";
 
 class UsageError extends Error {}
 
@@ -41,7 +41,7 @@ const COMMANDS = {
   "review start": {
     summary: "Start a review round bound to the head, merge base and trusted policy, or confirm the current one.",
     options: { target: { type: "string" }, head: { type: "string" }, lenses: { type: "string" }, depth: { type: "string" }, "user-depth": { type: "string" } },
-    run: (o, h) => h.review().start({ git: h.git(), targetRef: o.target ?? "main", head: o.head ?? "HEAD", lenses: list(o.lenses), depth: o.depth ?? null, userDepth: o["user-depth"] ?? null, actor: h.actor(), opId: o["op-id"] }),
+    run: (o, h) => h.review().start({ git: h.git(), targetRef: h.target(o.target), head: o.head ?? "HEAD", lenses: list(o.lenses), depth: o.depth ?? null, userDepth: o["user-depth"] ?? null, actor: h.actor(), opId: o["op-id"] }),
   },
   "review run": {
     summary: "Record one reviewer slot's run: ok with findings, or failed or skipped with a reason.",
@@ -175,7 +175,18 @@ const COMMANDS = {
     noRef: true,
     run: (o, h) => {
       const refs = listReviews(h.root()).filter((r) => !o.repo || r.repo === o.repo);
-      return inbox(refs.map((ref) => ({ ref, state: openReview(h.root(), ref).read() })));
+      // One review this build cannot read must not hide the others. It is
+      // listed for a person instead.
+      const items = [];
+      const readable = [];
+      for (const ref of refs) {
+        try {
+          readable.push({ ref, state: openReview(h.root(), ref).read() });
+        } catch (e) {
+          items.push({ repo: ref.repo, key: ref.key, round: null, code: "unreadable", ask: `this review cannot be read (${e.code ?? "error"}): ${e.message.split("\n")[0]}` });
+        }
+      }
+      return [...inbox(readable), ...items];
     },
   },
   "policy check": {
@@ -188,7 +199,7 @@ const COMMANDS = {
         const p = parsePolicy(readFileSync(o.file), { kind: "file", path: o.file });
         return { valid: true, version: p.version, warnings: p.warnings, policy: p.policy, effectiveDigest: p.effectiveDigest };
       }
-      const t = trustedPolicy({ git: h.git(), targetRef: o.target ?? "main", head: o.head ?? "HEAD", path: POLICY_FILE });
+      const t = trustedPolicy({ git: h.git(), targetRef: h.target(o.target), head: o.head ?? "HEAD", path: POLICY_FILE });
       return { valid: true, source: t.trusted.source, warnings: t.trusted.warnings, policy: t.trusted.policy, effectiveDigest: t.trusted.effectiveDigest, proposed: t.proposed, escalations: t.escalations };
     },
   },
@@ -254,14 +265,24 @@ export function main(argv, { env = process.env, stdout = process.stdout, stderr 
         if (!a) throw new UsageError("--actor is required: human:<name> or agent:<runtime> (or set AGENT_REVIEW_ACTOR)");
         return a;
       },
+      // The target branch: --target, else the remote's default branch (such
+      // as origin/main), else main.
+      target: (flag) => flag ?? h.git().defaultTarget() ?? "main",
       review: () => {
         if (cmd.noRef) throw new Error("internal: command has no review");
-        return openReview(h.root(), { repo: need(o, "repo"), key: need(o, "key") });
+        const ref = { repo: need(o, "repo"), key: need(o, "key") };
+        const review = openReview(h.root(), ref);
+        // A v1 ledger is imported on first read, while the review has no
+        // events of its own. The v1 file is never changed.
+        if (review.log.read().seq === 0) importLegacyV1(review.log, ref, legacyV1Path(h.root(), ref));
+        return review;
       },
       // Facts for eligibility: from a file, or fresh from GitHub plus the
       // local repository. Read again on every call, so a recheck is real.
       facts: (file) => {
-        if (file) return readJson(file);
+        // A file's facts are the caller's word, so they are marked as such
+        // whatever the file says; only fetched facts are "github".
+        if (file) return { ...readJson(file), source: "file" };
         if (!o.pr) throw new UsageError("give --pr <number> to read facts from GitHub, or --facts <file>");
         const host = githubFacts({ repo: need(o, "repo"), number: o.pr });
         const round = activeRound(h.review().read());
@@ -269,11 +290,13 @@ export function main(argv, { env = process.env, stdout = process.stdout, stderr 
         const git = h.git();
         let local;
         try {
-          local = localFacts({ git, round, targetRef: o.target ?? `origin/${host.target.ref}`, head: host.head });
+          // The same ref the review was bound to, so the merge base and policy
+          // are computed the same way; eligibility checks it against the host.
+          local = localFacts({ git, round, targetRef: o.target ?? round.binding.target.ref, head: host.head });
         } catch (e) {
           throw new UsageError(`${e.message}. Fetch the pull request first: git fetch origin pull/${o.pr}/head`);
         }
-        return { ...host, mergeBase: local.mergeBase, policyDigest: local.policyDigest, dependencyChanges: npmDependencyChanges(git, local.mergeBase, host.head) };
+        return { ...host, source: "github", localTarget: local.target, mergeBase: local.mergeBase, policyDigest: local.policyDigest, dependencyChanges: npmDependencyChanges(git, local.mergeBase, host.head) };
       },
     };
     if (o.json && o.text) throw new UsageError("use --json or --text, not both");

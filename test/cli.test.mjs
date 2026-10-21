@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitRepo, stateRoot, finding } from "./helpers.mjs";
@@ -168,6 +168,41 @@ test("--text gives a person a few lines, not JSON", () => {
   assert.match(refused.stderr, /^  - slot correctness \(correctness\) failed: rate limited/m);
   assert.equal(run(["inbox", "--text"], { actor: null }).stdout.trim(), "acme/widgets 7: slot correctness failed (rate limited); retry it, or accept the gap");
   assert.equal(run(["review", "next", ...K, "--text", "--json"], { actor: null }).status, 2);
+});
+
+test("a v1 ledger is imported on first read, and one unreadable review does not hide the others", () => {
+  const repo = gitRepo({ version: 1 });
+  const state = stateRoot();
+  const run = cli(repo, state);
+  const v1 = join(state, "reviews", "acme", "widgets", "3.json");
+  mkdirSync(join(v1, ".."), { recursive: true });
+  writeFileSync(v1, JSON.stringify({ schema: "scalvert.review/v1", repo: "acme/widgets", key: "3", rounds: [{ round: 1 }], findings: [] }));
+  const before = readFileSync(v1);
+  const n = run(["review", "next", "--repo", "acme/widgets", "--key", "3"], { actor: null });
+  assert.equal(n.status, 0, n.stderr);
+  assert.match(n.json.note, /v1 history only/);
+  assert.deepEqual(readFileSync(v1), before, "the v1 file is unchanged");
+
+  run(["review", "start", ...K, "--head", "feature"]);
+  run(["review", "run", ...K, "--slot", "correctness", "--status", "failed", "--reason", "timed out", "--head", "feature"]);
+  const future = join(state, "v2", "acme", "widgets", "8", "events.jsonl");
+  mkdirSync(join(future, ".."), { recursive: true });
+  writeFileSync(future, `${JSON.stringify({ schema: "agent-review.event/v1", seq: 1, at: "t", op: { id: "x", digest: "d", index: 0, size: 1 }, type: "review.from-the-future", actor: "agent:x", data: {} })}\n`);
+  const box = run(["inbox"], { actor: null });
+  assert.equal(box.status, 0, box.stderr);
+  assert.deepEqual(box.json.map((i) => [i.key, i.code]).sort(), [["7", "run-failed"], ["8", "unreadable"]]);
+});
+
+test("the default target is the remote's default branch when there is one", () => {
+  const repo = gitRepo({ version: 1 });
+  assert.equal(repo.adapter.defaultTarget(), null, "no remote");
+  repo.git("update-ref", "refs/remotes/origin/main", "main");
+  repo.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  assert.equal(repo.adapter.defaultTarget(), "origin/main");
+  const run = cli(repo, stateRoot());
+  const s = run(["review", "start", ...K, "--head", "feature"]);
+  assert.equal(s.status, 0, s.stderr);
+  assert.equal(run(["review", "status", ...K], { actor: null }).json.rounds[1].binding.target.ref, "origin/main");
 });
 
 test("the bin works through a symlink, as npm installs it", () => {

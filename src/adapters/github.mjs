@@ -34,8 +34,13 @@ export function githubFacts({ repo, number, api = ghApi, now = () => new Date().
   const commits = pages(api, `repos/${repo}/pulls/${number}/commits`).map((c) => ({
     sha: c.sha,
     verified: c.commit?.verification?.verified === true,
+    reason: c.commit?.verification?.reason ?? null,
     author: c.author?.login ?? null,
+    // "web-flow" when GitHub itself committed and signed it.
+    committer: c.committer?.login ?? null,
   }));
+  // This endpoint lists at most 250 commits. With 250, some may be missing.
+  const commitsComplete = commits.length < 250;
   const files = pages(api, `repos/${repo}/pulls/${number}/files`);
   const changedPaths = [...new Set(files.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean)))];
   const runs = pages(api, `repos/${repo}/commits/${head}/check-runs`).map((r) => ({ name: r.name, headSha: r.head_sha, status: r.status, conclusion: r.conclusion, source: "check-run" }));
@@ -89,6 +94,7 @@ export function githubFacts({ repo, number, api = ghApi, now = () => new Date().
     head,
     author: { login: pr.user?.login ?? null, type: pr.user?.type ?? null },
     commits,
+    commitsComplete,
     changedPaths,
     checks: { required, runs },
     approvals: { count: approvals, required: requiredApprovals, ignored },

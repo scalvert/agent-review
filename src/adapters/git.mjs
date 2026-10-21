@@ -20,6 +20,14 @@ export function gitAdapter(cwd) {
       }
       return git(["cat-file", "blob", `${commit}:${path}`]);
     },
+    // The remote's default branch, such as origin/main, if it is known.
+    defaultTarget(remote = "origin") {
+      try {
+        return git(["symbolic-ref", "--short", `refs/remotes/${remote}/HEAD`], { encoding: "utf8" }).trim() || null;
+      } catch {
+        return null;
+      }
+    },
     mergeBase(a, b) {
       return git(["merge-base", a, b], { encoding: "utf8" }).trim();
     },

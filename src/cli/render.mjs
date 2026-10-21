@@ -13,8 +13,10 @@ function action(a) {
       return "advance to verification";
     case "verify":
       return `verify ${a.findings.map((f) => `${f.finding} (not ${f.verifierMust.notFamily ?? f.verifierMust.notModel})`).join(", ")}`;
+    case "decide":
+      return `decide ${a.findings.map((f) => `${f.finding}: ${f.kinds.map((k) => k.replace("finding-", "")).join(", ")}`).join("; ")}`;
     case "classify":
-      return `classify ${a.findings.map((f) => `${f.finding}: ${f.kinds.map((k) => k.replace("finding-", "")).join(", ")}`).join("; ")}`;
+      return "classify the change (review classify)";
     case "verify-again":
       return `second verifier for ${a.findings.map((f) => f.finding).join(", ")}`;
     case "report":
@@ -49,7 +51,8 @@ export function renderInbox(items) {
 export function renderEligibility(e) {
   // Name the rule only when it decided the outcome, so a blocked result does
   // not read as if the rule blocked it.
-  const lines = [`${e.outcome}${e.outcome === "eligible" && e.provenance.rule ? ` (rule ${e.provenance.rule})` : ""}`];
+  const from = e.provenance.factsSource === "github" ? "" : `; simulated from ${e.provenance.factsSource} facts`;
+  const lines = [`${e.outcome}${e.outcome === "eligible" && e.provenance.rule ? ` (rule ${e.provenance.rule})` : ""}${from}`];
   for (const r of e.reasons) {
     lines.push(`  ${r.effect === "blocked" ? "blocks" : "for a person"}: ${r.message}`);
     for (const miss of r.rules ?? []) lines.push(`    rule ${miss.rule}: ${miss.why.join("; ")}`);

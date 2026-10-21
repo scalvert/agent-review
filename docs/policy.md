@@ -4,7 +4,7 @@ A repository sets its review rules in `agent-review.json` at its root. The harne
 
 ```json
 {
-  "$schema": "https://github.com/scalvert/agent-review/schema/policy-v1.schema.json",
+  "$schema": "https://raw.githubusercontent.com/scalvert/agent-review/main/schema/policy-v1.schema.json",
   "version": 1,
   "review": { "minDepth": "standard", "deepPaths": ["src/auth/**", ".github/workflows/**"], "minReviewers": 2 },
   "independence": { "minFamilies": 2, "verifier": "family", "secondVerifierForBlockers": true },
@@ -39,7 +39,7 @@ One exception keeps old repositories working. A file with no version that has on
 
 ## Settings
 
-Every setting is optional, except `version`. The JSON Schema in `schema/policy-v1.schema.json` lists them for editors.
+Every setting is optional, except `version`. The JSON Schema in `schema/policy-v1.schema.json` lists them for editors. `$schema` is allowed for editors and is not part of the resolved policy, so changing the URL does not change the policy's digest. The URL resolves once this repository is public.
 
 | Setting | Default | Meaning |
 |---|---|---|

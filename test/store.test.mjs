@@ -220,20 +220,52 @@ test("a held lock: the writer waits, then commits once the lock is released", as
   assert.ok(!existsSync(lock));
 });
 
-test("stale locks are recovered: a dead PID, or older than 30 seconds", () => {
+const deadPid = () => Number(spawnSync("node", ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }).stdout);
+
+test("a lock whose process is gone is recovered, and so is an old lock with no readable PID", () => {
   const r = root();
   const { lock, dir } = reviewPaths(r, REF);
   mkdirSync(dir, { recursive: true });
-  const dead = Number(spawnSync("node", ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }).stdout);
-  writeFileSync(lock, JSON.stringify({ pid: dead, token: "crashed" }));
+  writeFileSync(lock, JSON.stringify({ pid: deadPid(), token: "crashed" }));
   const log = openLog(r, REF);
   log.append([ev(1)]);
-  writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "old" }));
+  writeFileSync(lock, "");
   const old = new Date(Date.now() - 60_000);
   utimesSync(lock, old, old);
   log.append([ev(2)]);
   assert.equal(log.read().seq, 2);
   assert.ok(!existsSync(lock));
+  assert.ok(!existsSync(`${lock}.break`), "the breaker is released");
+});
+
+test("a lock held by a live process is never removed, however old: the writer reports busy", () => {
+  const r = root();
+  const { lock, dir } = reviewPaths(r, REF);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "old" }));
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(lock, old, old);
+  const log = openLog(r, REF, { lock: { timeoutMs: 150 } });
+  assert.throws(() => log.append([ev(1)]), code(BUSY));
+  assert.ok(existsSync(lock), "the live owner's lock is still there");
+  assert.equal(log.read().seq, 0);
+});
+
+test("only the breaker's holder reclaims; a breaker left by a crash is cleared", () => {
+  const r = root();
+  const { lock, dir } = reviewPaths(r, REF);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(lock, JSON.stringify({ pid: deadPid(), token: "crashed" }));
+  // Another live waiter is reclaiming: this writer must not touch the lock.
+  writeFileSync(`${lock}.break`, JSON.stringify({ pid: process.pid, token: "breaker" }));
+  const log = openLog(r, REF, { lock: { timeoutMs: 150 } });
+  assert.throws(() => log.append([ev(1)]), code(BUSY));
+  assert.ok(existsSync(lock), "the stale lock waits for the breaker's holder");
+  // The breaker's holder crashed too: its breaker is cleared, then the lock.
+  writeFileSync(`${lock}.break`, JSON.stringify({ pid: deadPid(), token: "breaker" }));
+  log.append([ev(1)]);
+  assert.equal(log.read().seq, 1);
+  assert.ok(!existsSync(`${lock}.break`));
 });
 
 test("a failed append leaves no lock and no temp files", () => {

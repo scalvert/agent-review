@@ -1,9 +1,22 @@
 // An exclusive lock on one path, for writers on one machine.
 //
-// The lock is a file created with O_EXCL. It holds the owner's PID and a
-// random token. A lock whose process is gone, or that is older than staleMs,
-// was left by a crash and is removed. A writer that cannot get the lock within
-// timeoutMs fails with store/busy, having done nothing.
+// The lock is a file created with O_EXCL, holding the owner's PID and a
+// random token. A writer that cannot get it within timeoutMs fails with
+// store/busy, having done nothing.
+//
+// Reclaiming a lock left by a crash is the dangerous part: two waiters can
+// both see the same dead lock, and the slower one must not delete the lock
+// the faster one just took. So:
+//
+// - A lock is stale only when its process is gone. A lock held by a live
+//   process is never removed, however old; the writer reports busy, and a
+//   person can remove the lock. (A lock file with no readable PID, left by
+//   a crash during creation, is stale once it is older than staleMs.)
+// - Only the holder of a short "breaker" lock (<path>.break, also O_EXCL)
+//   may remove a stale lock, and only after reading it again under the
+//   breaker. Others wait. So no two waiters reclaim at once.
+// - A breaker left by a crash is removed when its process is gone. That is
+//   the one remaining window, and it needs two crashes in a row.
 //
 // Not covered: state directories shared between machines over a network
 // file system, where O_EXCL and PIDs are not reliable.
@@ -34,47 +47,76 @@ function readLock(path) {
   }
 }
 
-// Stale when its writer is gone, or when it is too old to belong to a
-// running command, which also covers a reused PID. A lock with no content
-// yet is being created right now, so only age can make it stale.
 function isStale({ text, mtimeMs }, staleMs) {
-  if (Date.now() - mtimeMs > staleMs) return true;
+  let pid;
   try {
-    return !alive(JSON.parse(text).pid);
+    pid = JSON.parse(text).pid;
   } catch {
+    return Date.now() - mtimeMs > staleMs;
+  }
+  return !alive(pid);
+}
+
+function create(path, token) {
+  try {
+    const fd = openSync(path, "wx");
+    try {
+      writeSync(fd, token);
+    } finally {
+      closeSync(fd);
+    }
+    return true;
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
     return false;
   }
 }
 
-export function acquire(path, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAULT_STALE_MS } = {}) {
-  const token = JSON.stringify({ pid: process.pid, token: randomBytes(8).toString("hex"), at: new Date().toISOString() });
-  const deadline = Date.now() + timeoutMs;
-  for (let wait = 5; ; wait = Math.min(wait * 2, 100)) {
-    try {
-      const fd = openSync(path, "wx");
+const newToken = () => JSON.stringify({ pid: process.pid, token: randomBytes(8).toString("hex"), at: new Date().toISOString() });
+
+// Remove the lock at path if it is stale, holding the breaker while doing it.
+function reclaim(path, staleMs) {
+  const breaker = `${path}.break`;
+  const token = newToken();
+  if (!create(breaker, token)) {
+    const b = readLock(breaker);
+    if (b && isStale(b, staleMs)) {
       try {
-        writeSync(fd, token);
-      } finally {
-        closeSync(fd);
-      }
-      return token;
-    } catch (e) {
-      if (e.code !== "EEXIST") throw e;
+        unlinkSync(breaker);
+      } catch {}
     }
+    return;
+  }
+  try {
     const held = readLock(path);
     if (held && isStale(held, staleMs)) {
-      // Remove it only if it is still the same stale lock, so a waiter does
-      // not delete a lock another waiter just took.
-      const again = readLock(path);
-      if (again && again.text === held.text && again.mtimeMs === held.mtimeMs) {
-        try {
-          unlinkSync(path);
-        } catch {}
-      }
-      continue;
+      try {
+        unlinkSync(path);
+      } catch {}
+    }
+  } finally {
+    if (readLock(breaker)?.text === token) {
+      try {
+        unlinkSync(breaker);
+      } catch {}
+    }
+  }
+}
+
+export function acquire(path, { timeoutMs = DEFAULT_TIMEOUT_MS, staleMs = DEFAULT_STALE_MS } = {}) {
+  const token = newToken();
+  const deadline = Date.now() + timeoutMs;
+  for (let wait = 5; ; wait = Math.min(wait * 2, 100)) {
+    if (create(path, token)) return token;
+    const held = readLock(path);
+    if (held && isStale(held, staleMs)) {
+      reclaim(path, staleMs);
+      // Retry at once only if the lock is gone. If another waiter holds the
+      // breaker, wait like any other writer, so the deadline still applies.
+      if (!readLock(path)) continue;
     }
     if (Date.now() > deadline) {
-      throw new StoreError(BUSY, `busy: another writer holds ${path}, so nothing was written. Retry; if nothing else is running, remove the lock file.`, { lock: path });
+      throw new StoreError(BUSY, `busy: another writer holds ${path}, so nothing was written. Retry; if no review command is running, remove the lock file.`, { lock: path });
     }
     sleep(wait + Math.floor(Math.random() * wait));
   }
