@@ -50,7 +50,7 @@ function eligibleCase({ policy = POLICY, finding = null, classify = { category: 
   review.advance({ actor: A });
   if (finding) {
     for (const [kind, label] of [["finding-verification", "confirmed"], ["finding-severity", finding.severity], ["finding-origin", "introduced"], ["finding-triage", finding.triage ?? "agent-fixable"]]) {
-      review.decide({ finding: "F1", kind, label, probability: 0.9, rationale: "r", verifier: { model: "openai/gpt-5.5" }, head, actor: A });
+      review.decide({ candidate: 1, kind, label, probability: 0.9, rationale: "r", verifier: { model: "openai/gpt-5.5" }, head, actor: A });
     }
   }
   if (classify) review.classify({ ...classify, rationale: "lockfile-only patch bump", classifier: { model: "openai/gpt-5.5" }, head, actor: A });
@@ -144,10 +144,10 @@ test("an unresolved disqualifying finding blocks; a cleared one does not; a judg
   assert.equal(e.outcome, BLOCKED);
   assert.deepEqual(codes(e), ["disqualifying-finding"]);
   // Clearing a blocker overrides an independent verification: people only.
-  assert.throws(() => blocker.review.dispose({ finding: "F1", as: "wrong", note: "it is the real package", actor: A }), (e) => e.code === "workflow/forbidden");
-  blocker.review.dispose({ finding: "F1", as: "wrong", note: "it is the real package", actor: "human:steve" });
+  assert.throws(() => blocker.review.dispose({ finding: 1, as: "wrong", note: "it is the real package", actor: A }), (e) => e.code === "workflow/forbidden");
+  blocker.review.dispose({ finding: 1, as: "wrong", note: "it is the real package", actor: "human:steve" });
   assert.equal(evaluateEligibility({ state: blocker.review.read(), facts: blocker.facts }).outcome, ELIGIBLE);
-  blocker.review.dispose({ finding: "F1", as: "accepted", actor: A });
+  blocker.review.dispose({ finding: 1, as: "accepted", actor: A });
   assert.deepEqual(codes(evaluateEligibility({ state: blocker.review.read(), facts: blocker.facts })), ["disqualifying-finding"], "accepted means real and still there");
 
   const nit = eligibleCase({ finding: { ...f, severity: "nit" } });
@@ -261,7 +261,7 @@ test("a disputed finding: rejecting it drops it; approving it makes it real, and
     review.recordRun({ slot: "correctness", status: "ok", model: "anthropic/opus", head: repo.head, actor: A, findings: [f] });
     review.recordRun({ slot: "security", status: "ok", model: "openai/gpt-5.5", head: repo.head, actor: A });
     review.advance({ actor: A });
-    const d = (kind, label, model) => review.decide({ finding: "F1", kind, label, probability: 0.9, rationale: "r", verifier: { model }, head: repo.head, actor: A });
+    const d = (kind, label, model) => review.decide({ candidate: 1, kind, label, probability: 0.9, rationale: "r", verifier: { model }, head: repo.head, actor: A });
     d("finding-verification", "confirmed", "openai/gpt-5.5");
     d("finding-verification", "refuted", "google/gemini-3");
     assert.deepEqual(next(review.read()).action.findings.map((x) => x.kinds), [["finding-severity", "finding-origin"]], "a disputed finding is rated before a person settles it");
@@ -273,12 +273,12 @@ test("a disputed finding: rejecting it drops it; approving it makes it real, and
     review.resolveEscalation({ id: x.id, decision, reason: "looked at it", actor: "human:steve" });
     return review;
   };
-  const finding = (e) => e.reasons.filter((r) => r.finding === "F1" || r.code === "escalation-rejected").map((r) => r.code);
+  const finding = (e) => e.reasons.filter((r) => r.finding === 1 || r.code === "escalation-rejected").map((r) => r.code);
   const rejected = run("reject");
   assert.deepEqual(finding(evaluateEligibility({ state: rejected.read(), facts: { head: null } })), [], "rejected: not a problem, and nothing blocks on it");
   const approved = run("approve");
   assert.deepEqual(finding(evaluateEligibility({ state: approved.read(), facts: { head: null } })), ["disqualifying-finding"]);
-  approved.dispose({ finding: "F1", as: "not-worth-it", note: "pinned upstream", actor: "human:steve" });
+  approved.dispose({ finding: 1, as: "not-worth-it", note: "pinned upstream", actor: "human:steve" });
   assert.deepEqual(finding(evaluateEligibility({ state: approved.read(), facts: { head: null } })), []);
 });
 

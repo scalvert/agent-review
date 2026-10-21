@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0
+
+Findings are named by number. Internal keys such as `F2` never reach a person, so they cannot end up in a report or a pull request comment.
+
+- **Breaking:** `review decide` takes `--candidate <n>` instead of `--finding <id>`, and `review merge` takes `--into <n> --duplicates <n,n>` instead of `--into <id> --ids <ids>`. A candidate is a reviewer's claim in the current round, numbered 1, 2, 3 in the order recorded.
+- **Breaking:** `review dispose` and `review link` take `--finding <n>`, the number the report gave the finding. A round numbers its reported and disputed findings when it reports, in report order, after the numbers earlier rounds used, so a number names one finding for the whole review. `link` now needs a numbered finding.
+- **Breaking:** an internal key passed to `--candidate`, `--finding`, `--into` or `--duplicates` is a usage error, exit 2. The library's `decide`, `merge`, `dispose` and `link` take the same numbers.
+- `review next`, `inbox`, `review status`, eligibility reasons and refusals name candidates and findings by number. `review next` lists each candidate with its title, file and line, and its report shows `findings` (number and section), `disputed` and `dropped`.
+- A dispute's escalation names the finding by number and title.
+- `dispose` on a disputed finding says the dispute is settled first, and names the escalation.
+- New exports: `SECTIONS`, `placement`, `numberReport`, `publicReport` and `publicState`.
+- A review written by 0.2 is numbered when it is read, the same way a report numbers findings now. Cached snapshots are rebuilt.
+
 ## 0.2.0
 
 - `review.maxRounds` (default 3) caps review rounds on new code per change, counting imported v1 rounds. Only a person can start a round past it, with `--past-cap`. A restart at the same head, because the target's policy or the merge base moved, does not count against it. A run can lower the cap, never raise it. `next` shows `roundsSoFar`.

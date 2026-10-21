@@ -51,39 +51,46 @@ test("the full flow on the command line, with a refused step along the way", () 
   assert.equal(viaStdin.status, 0, viaStdin.stderr);
   assert.equal(run(["review", "advance", ...K]).json.next.action.do, "verify");
 
-  const same = run(["review", "decide", ...K, "--finding", "F1", "--kind", "finding-verification", "--label", "confirmed", "--probability", "0.9", "--rationale", "r", "--verifier-model", "anthropic/sonnet", "--head", "feature"]);
+  // Candidates and findings are named by number; an internal key is a usage error.
+  const key = run(["review", "decide", ...K, "--candidate", "F1", "--kind", "finding-verification", "--label", "confirmed", "--probability", "0.9", "--rationale", "r", "--verifier-model", "openai/gpt-5.5", "--head", "feature"]);
+  assert.equal(key.status, 2);
+  assert.match(key.stderr, /--candidate takes a number as the harness shows it, such as 2, not F1/);
+
+  const same = run(["review", "decide", ...K, "--candidate", "1", "--kind", "finding-verification", "--label", "confirmed", "--probability", "0.9", "--rationale", "r", "--verifier-model", "anthropic/sonnet", "--head", "feature"]);
   assert.equal(same.status, 1);
   assert.equal(same.json.error.reasons[0].code, "verifier-not-independent");
 
   const rationale = join(dir, "why.txt");
   writeFileSync(rationale, "reproduced with a failing test\n");
   for (const [kind, label] of [["finding-verification", "confirmed"], ["finding-severity", "should-fix"], ["finding-origin", "introduced"], ["finding-triage", "needs-judgment"]]) {
-    const r = run(["review", "decide", ...K, "--finding", "F1", "--kind", kind, "--label", label, "--probability", "0.9", "--rationale-file", rationale, "--verifier-model", "openai/gpt-5.5", "--head", "feature"]);
+    const r = run(["review", "decide", ...K, "--candidate", "1", "--kind", kind, "--label", label, "--probability", "0.9", "--rationale-file", rationale, "--verifier-model", "openai/gpt-5.5", "--head", "feature"]);
     assert.equal(r.status, 0, r.stderr);
   }
   const reported = run(["review", "report", ...K]);
   assert.equal(reported.json.next.status, "complete");
   assert.equal(reported.json.next.waitingOn, "human", "the judgment call still waits on a person");
-  assert.deepEqual(reported.json.next.action, { do: "dispose", findings: ["F1"] });
-  assert.deepEqual(reported.json.next.report.reported, ["F1"]);
+  assert.deepEqual(reported.json.next.action, { do: "dispose", findings: [1] });
+  assert.deepEqual(reported.json.next.report.findings, [{ n: 1, section: "should-fix" }]);
 
   // The person sees only the judgment call, not every finding.
   const box = run(["inbox"], { actor: null });
   assert.equal(box.status, 0, box.stderr);
-  assert.deepEqual(box.json.map((i) => [i.repo, i.key, i.code, i.finding]), [["acme/widgets", "7", "needs-judgment", "F1"]]);
+  assert.deepEqual(box.json.map((i) => [i.repo, i.key, i.code, i.finding]), [["acme/widgets", "7", "needs-judgment", 1]]);
 
   // It is the person's call: an agent cannot settle it, a person can.
-  assert.equal(run(["review", "dispose", ...K, "--finding", "F1", "--as", "wrong"]).json.error.code, "workflow/forbidden");
-  assert.equal(run(["review", "dispose", ...K, "--finding", "F1", "--as", "accepted", "--note", "a", "--note-file", "-"], { actor: "human:steve", input: "b" }).status, 2, "one note, not two");
+  assert.equal(run(["review", "dispose", ...K, "--finding", "1", "--as", "wrong"]).json.error.code, "workflow/forbidden");
+  assert.equal(run(["review", "dispose", ...K, "--finding", "1", "--as", "accepted", "--note", "a", "--note-file", "-"], { actor: "human:steve", input: "b" }).status, 2, "one note, not two");
   // A note copied from a pull request comes in on stdin, and is kept as written.
   const note = "real; fix in a follow-up $(touch pwned)";
-  const settled = run(["review", "dispose", ...K, "--finding", "F1", "--as", "accepted", "--note-file", "-"], { actor: "human:steve", input: `${note}\n` });
+  const settled = run(["review", "dispose", ...K, "--finding", "1", "--as", "accepted", "--note-file", "-"], { actor: "human:steve", input: `${note}\n` });
   assert.equal(settled.status, 0, settled.stderr);
   assert.equal(settled.json.next.waitingOn, null);
   assert.deepEqual(run(["inbox"], { actor: null }).json, []);
-  assert.equal(run(["review", "dispose", ...K, "--finding", "F9", "--as", "fixed"]).json.error.reasons[0].code, "not-reported");
+  assert.equal(run(["review", "dispose", ...K, "--finding", "9", "--as", "fixed"]).json.error.reasons[0].code, "unknown-finding");
 
   const status = run(["review", "status", ...K], { actor: null });
+  assert.equal(status.stdout.match(/"F[0-9]+"/), null, "status names findings by number only");
+  assert.deepEqual([status.json.findings[0].candidate, status.json.findings[0].number], [1, 1]);
   assert.equal(status.json.findings[0].decisions["finding-verification"][0].rationale, "reproduced with a failing test");
   assert.equal(status.json.findings[0].disposition.note, note);
 });

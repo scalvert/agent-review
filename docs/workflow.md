@@ -16,13 +16,23 @@ new head, merge base or policy on the next start -> round invalidated -> new rou
 | `recordRun` | `reviewing`, the bound head, a planned slot | One slot's run: `ok`, `failed` or `skipped`, with model, family, runner and findings. Each finding may also carry `class` (kebab-case), `instances` (other `{ file, line }` places with the same mistake) and `axiom`. |
 | `acceptGap` | A person; a slot that did not run successfully | That the panel may go ahead without the slot, with a reason |
 | `advance` | Every slot ok or gap-accepted, `minReviewers` and `minFamilies` met | The move to `verifying` |
-| `merge` | Duplicates with no decisions yet | That findings are duplicates of a primary |
-| `decide` | `verifying`, the bound head, a verifier independent of the author | A verification, severity, triage or origin decision |
-| `report` | Every finding verified; reported findings with severity and origin; a second verifier on blockers when the policy asks | Reported, dropped and escalated findings, and coverage |
+| `merge` | Candidates in this round, as duplicates with no decisions yet | That candidates are duplicates of a primary candidate |
+| `decide` | `verifying`, the bound head, a candidate in this round, a verifier independent of its author | A verification, severity, triage or origin decision |
+| `report` | Every candidate verified; reported candidates with severity and origin; a second verifier on blockers when the policy asks | Reported, dropped and disputed candidates, coverage, and the finding number of each reported or disputed one |
 | `resolveEscalation` | A person; an open escalation in the current round | Approve or reject, with a reason |
-| `dispose` | `reported`; a reported finding, or a disputed one a person approved. A person, if the finding is triaged `needs-judgment`, or if it clears (`wrong`, `intended`, `not-worth-it`) a finding at a disqualifying or missing severity | `fixed`, `accepted`, `wrong`, `intended` or `not-worth-it`, with an optional note |
+| `dispose` | A finding number: a reported finding, or a disputed one a person approved. A person, if the finding is triaged `needs-judgment`, or if it clears (`wrong`, `intended`, `not-worth-it`) a finding at a disqualifying or missing severity | `fixed`, `accepted`, `wrong`, `intended` or `not-worth-it`, with an optional note |
 | `classify` | `reviewing`, `verifying` or `reported`; the bound head. A person, to change the category once it is set | The change's category, such as `deps-patch`, with a probability. Evidence for the merge policy, never permission. |
-| `link` | A finding in any round | The host's review thread that carries it, such as a pull request comment, with an optional https URL |
+| `link` | A finding number, from any round | The host's review thread that carries it, such as a pull request comment, with an optional https URL |
+
+## Naming findings
+
+A finding has two numbers that people and agents use, and an internal key that neither ever sees.
+
+- **Candidate number.** A reviewer's claim, before verification, is a candidate. A round numbers its candidates 1, 2, 3 in the order they were recorded. `merge` and `decide` take a candidate number, and `next` lists candidates by number while the round is reviewing or verifying.
+- **Finding number.** When a round reports, each reported or disputed candidate gets a finding number, in report order: blockers, should-fix, pre-existing, smaller, then unrated, and by file and line within a section. Numbers continue from the last round's, so a finding keeps its number for the whole review, and "finding 2" means the same thing in every round. `dispose` and `link` take a finding number. A dropped candidate gets none.
+- **Internal key.** The event log ties events together with keys such as `F1`. No operation takes one, and nothing `next`, `inbox`, `review status` or a refusal returns contains one, so none can end up in a report or a pull request comment.
+
+A review written before 0.3 has no numbers in its log. The harness gives them when it reads the log, the same way a report gives them now.
 
 `next(state)` returns the next required step, who it waits on, and what a person needs to look at. `inbox(reviews)` lists the same person items across reviews: escalations, failed slots, and reported findings triaged `needs-judgment` with no disposition yet. Each comes with a one-line ask. A review is `complete` once no escalation is open. Judgment calls on its findings still show as waiting on a person until someone disposes of them.
 
@@ -34,7 +44,7 @@ Calling `start` again with the same head, merge base and policy returns the exis
 
 ## Independence
 
-Every decision about a finding (verification, severity, triage and origin) must come from a different model than the finding's author. With `independence.verifier: "family"` (the default), it must also come from a different family. Otherwise an author could rate its own finding a nit, or triage away a judgment call. One model cannot verify the same finding twice with different answers.
+Every decision about a candidate (verification, severity, triage and origin) must come from a different model than its author. With `independence.verifier: "family"` (the default), it must also come from a different family. Otherwise an author could rate its own finding a nit, or triage away a judgment call. One model cannot verify the same finding twice with different answers.
 
 When verifiers disagree, the finding needs a severity and an origin, then goes to a person. The report does not pick a side. If the person approves, the finding is real: it blocks according to its severity, and a person can dispose of it. If the person rejects, the finding is not a problem, and it is dropped.
 

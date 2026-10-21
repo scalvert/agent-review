@@ -17,6 +17,9 @@ import {
   next,
   openLog,
   openReview,
+  publicState,
+  reduce,
+  initialState,
 } from "../src/index.mjs";
 import { finding, gitRepo, stateRoot } from "./helpers.mjs";
 
@@ -48,6 +51,17 @@ function happyPanel(review, head) {
   review.advance({ actor: AGENT });
 }
 
+// The happy panel, with candidate 1 confirmed at a severity and candidate 2
+// refuted, then reported.
+function reportOne(review, head, severity = "should-fix") {
+  happyPanel(review, head);
+  for (const [kind, label] of [["finding-verification", "confirmed"], ["finding-severity", severity], ["finding-origin", "introduced"], ["finding-triage", "agent-fixable"]]) {
+    review.decide({ candidate: 1, kind, label, probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  }
+  review.decide({ candidate: 2, kind: "finding-verification", label: "refuted", probability: 0.1, rationale: "r", verifier: { model: OPUS }, head, actor: AGENT });
+  return review.report({ actor: AGENT }).state;
+}
+
 test("a valid path reaches a complete review, with provenance for every step", () => {
   const { repo, review, head, state } = setup({ version: 1 });
   const round = state.rounds[1];
@@ -60,22 +74,25 @@ test("a valid path reaches a complete review, with provenance for every step", (
   assert.deepEqual(next(state).action.do, "run");
 
   happyPanel(review, head);
-  assert.deepEqual(next(review.read()).action.findings.map((f) => [f.finding, f.verifierMust]), [
-    ["F1", { notFamily: "anthropic" }],
-    ["F2", { notFamily: "openai" }],
+  assert.deepEqual(next(review.read()).action.findings.map((f) => [f.candidate, f.title, f.verifierMust]), [
+    [1, "finding 1", { notFamily: "anthropic" }],
+    [2, "finding 2", { notFamily: "openai" }],
   ]);
-  review.decide({ finding: "F1", kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: "reproduced", verifier: { model: GPT }, head, actor: AGENT });
-  review.decide({ finding: "F2", kind: "finding-verification", label: "refuted", probability: 0.2, rationale: "guarded at a.js:3", verifier: { model: OPUS }, head, actor: AGENT });
-  assert.deepEqual(next(review.read()).action, { do: "decide", findings: [{ finding: "F1", kinds: ["finding-severity", "finding-origin", "finding-triage"], verifierMust: { notFamily: "anthropic" } }] });
+  review.decide({ candidate: 1, kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: "reproduced", verifier: { model: GPT }, head, actor: AGENT });
+  review.decide({ candidate: 2, kind: "finding-verification", label: "refuted", probability: 0.2, rationale: "guarded at a.js:3", verifier: { model: OPUS }, head, actor: AGENT });
+  assert.deepEqual(next(review.read()).action, {
+    do: "decide",
+    findings: [{ candidate: 1, title: "finding 1", file: "src/f1.js", line: 1, kinds: ["finding-severity", "finding-origin", "finding-triage"], author: { slot: "correctness", model: OPUS, family: "anthropic" }, verifierMust: { notFamily: "anthropic" } }],
+  });
   for (const [kind, label] of [["finding-severity", "should-fix"], ["finding-origin", "introduced"], ["finding-triage", "agent-fixable"]]) {
-    review.decide({ finding: "F1", kind, label, probability: 0.8, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+    review.decide({ candidate: 1, kind, label, probability: 0.8, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
   }
   assert.equal(next(review.read()).action.do, "report");
   const done = review.report({ actor: AGENT }).state;
   const n = next(done);
   assert.equal(n.status, "complete");
-  assert.deepEqual(n.report.reported, ["F1"]);
-  assert.deepEqual(n.report.dropped, ["F2"]);
+  assert.deepEqual(n.report.findings, [{ n: 1, section: "should-fix" }]);
+  assert.deepEqual(n.report.dropped, [2], "dropped candidates, by candidate number");
   assert.equal(n.report.coverage.complete, true);
   const f1 = done.findings[0];
   assert.deepEqual(f1.author, { slot: "correctness", model: OPUS, family: "anthropic" });
@@ -107,33 +124,33 @@ test("findings without the evidence the policy requires are refused, and nothing
 test("a verifier from the author's model, or its family when the policy says so, is refused", () => {
   const { review, head } = setup({ version: 1 });
   happyPanel(review, head);
-  const verify = (model, extra = {}) => review.decide({ finding: "F1", kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: "r", verifier: { model, ...extra }, head, actor: AGENT });
+  const verify = (model, extra = {}) => review.decide({ candidate: 1, kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: "r", verifier: { model, ...extra }, head, actor: AGENT });
   assert.throws(() => verify(OPUS), refused(REFUSED, ["verifier-not-independent"]), "the author verifying itself");
   assert.throws(() => verify(SONNET), refused(REFUSED, ["verifier-not-independent"]), "the author's family");
   assert.throws(() => verify("gateway/claude-x", { family: "anthropic" }), refused(REFUSED, ["verifier-not-independent"]), "a declared family counts");
   assert.equal(verify(GPT).changed, true);
   assert.equal(verify(GPT).changed, false, "the same decision again is a no-op");
   assert.throws(
-    () => review.decide({ finding: "F1", kind: "finding-verification", label: "refuted", probability: 0.4, rationale: "x", verifier: { model: GPT }, head, actor: AGENT }),
+    () => review.decide({ candidate: 1, kind: "finding-verification", label: "refuted", probability: 0.4, rationale: "x", verifier: { model: GPT }, head, actor: AGENT }),
     refused(REFUSED, ["verifier-repeated"]),
     "one model cannot verify the same finding twice with a different answer",
   );
 
   const model = setup({ version: 1, independence: { verifier: "model" } });
   happyPanel(model.review, model.head);
-  model.review.decide({ finding: "F1", kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: "r", verifier: { model: SONNET }, head: model.head, actor: AGENT });
+  model.review.decide({ candidate: 1, kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: "r", verifier: { model: SONNET }, head: model.head, actor: AGENT });
 });
 
 test("decisions without the required rationale are refused", () => {
   const { review, head } = setup({ version: 1 });
   happyPanel(review, head);
-  assert.throws(() => review.decide({ finding: "F1", kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: " ", verifier: { model: GPT }, head, actor: AGENT }), refused(REFUSED, ["decision-field"]));
-  assert.throws(() => review.decide({ finding: "F1", kind: "finding-verification", label: "maybe", probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT }), refused(WORKFLOW_INVALID));
+  assert.throws(() => review.decide({ candidate: 1, kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: " ", verifier: { model: GPT }, head, actor: AGENT }), refused(REFUSED, ["decision-field"]));
+  assert.throws(() => review.decide({ candidate: 1, kind: "finding-verification", label: "maybe", probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT }), refused(WORKFLOW_INVALID));
 });
 
 test("steps out of order are refused with the reason", () => {
   const { review, head } = setup({ version: 1 });
-  assert.throws(() => review.decide({ finding: "F1", kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT }), refused(REFUSED, ["wrong-state"]));
+  assert.throws(() => review.decide({ candidate: 1, kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT }), refused(REFUSED, ["wrong-state"]));
   assert.throws(() => review.report({ actor: AGENT }), refused(REFUSED, ["wrong-state"]));
   happyPanel(review, head);
   assert.throws(() => review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT }), refused(REFUSED, ["wrong-state"]));
@@ -197,22 +214,24 @@ test("a change to an escalation path goes to a person", () => {
 test("verifiers that disagree go to a person; only a person resolves it", () => {
   const { review, head } = setup({ version: 1, independence: { verifier: "model" } });
   happyPanel(review, head);
-  const v = (finding, model, label, p = 0.9) => review.decide({ finding, kind: "finding-verification", label, probability: p, rationale: "r", verifier: { model }, head, actor: AGENT });
-  v("F1", GPT, "confirmed");
-  v("F1", SONNET, "refuted", 0.3);
-  v("F2", OPUS, "refuted", 0.2);
+  const v = (candidate, model, label, p = 0.9) => review.decide({ candidate, kind: "finding-verification", label, probability: p, rationale: "r", verifier: { model }, head, actor: AGENT });
+  v(1, GPT, "confirmed");
+  v(1, SONNET, "refuted", 0.3);
+  v(2, OPUS, "refuted", 0.2);
   assert.throws(() => review.report({ actor: AGENT }), refused(REFUSED, ["no-severity", "no-origin"]), "a disputed finding is rated before a person settles it");
   for (const [kind, label] of [["finding-severity", "should-fix"], ["finding-origin", "introduced"]]) {
-    review.decide({ finding: "F1", kind, label, probability: 0.8, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+    review.decide({ candidate: 1, kind, label, probability: 0.8, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
   }
   const s = review.report({ actor: AGENT }).state;
   const n = next(s);
   assert.equal(n.status, "reported");
   assert.equal(n.waitingOn, "human");
-  assert.deepEqual(s.rounds[1].report.escalated, ["F1"]);
+  assert.equal(s.findings[0].number, 1, "a disputed finding is numbered with the report");
   const [item] = inbox([{ ref: REF, state: s }]);
   assert.equal(item.code, "verifiers-disagree");
-  assert.match(item.ask, /a person decides/);
+  assert.equal(item.finding, 1);
+  assert.match(item.ask, /^verifiers disagree on finding 1, finding 1 \(.*\); a person decides/);
+  assert.throws(() => review.dispose({ finding: 1, as: "fixed", actor: AGENT }), refused(REFUSED, ["disputed"]), "an open dispute is settled first");
   assert.throws(() => review.resolveEscalation({ id: item.escalation, decision: "approve", reason: "real", actor: AGENT }), refused(FORBIDDEN));
   const done = review.resolveEscalation({ id: item.escalation, decision: "approve", reason: "it is real", actor: HUMAN }).state;
   assert.equal(next(done).status, "complete");
@@ -285,15 +304,15 @@ test("parallel reviewer processes on different slots all land", async () => {
 test("a blocker needs a second verifier from another model when the policy says so", () => {
   const { review, head } = setup({ version: 1, independence: { secondVerifierForBlockers: true, verifier: "model" } });
   happyPanel(review, head);
-  const d = (finding, kind, label, model) => review.decide({ finding, kind, label, probability: 0.9, rationale: "r", verifier: { model }, head, actor: AGENT });
-  d("F1", "finding-verification", "confirmed", GPT);
-  d("F1", "finding-severity", "blocker", GPT);
-  d("F1", "finding-origin", "introduced", GPT);
-  d("F1", "finding-triage", "agent-fixable", GPT);
-  d("F2", "finding-verification", "refuted", OPUS);
+  const d = (candidate, kind, label, model) => review.decide({ candidate, kind, label, probability: 0.9, rationale: "r", verifier: { model }, head, actor: AGENT });
+  d(1, "finding-verification", "confirmed", GPT);
+  d(1, "finding-severity", "blocker", GPT);
+  d(1, "finding-origin", "introduced", GPT);
+  d(1, "finding-triage", "agent-fixable", GPT);
+  d(2, "finding-verification", "refuted", OPUS);
   assert.deepEqual(next(review.read()).action.do, "verify-again");
   assert.throws(() => review.report({ actor: AGENT }), refused(REFUSED, ["second-verifier"]));
-  d("F1", "finding-verification", "confirmed", SONNET);
+  d(1, "finding-verification", "confirmed", SONNET);
   assert.equal(next(review.report({ actor: AGENT }).state).status, "complete");
 });
 
@@ -331,7 +350,7 @@ test("the default plan can complete: enough slots for the family minimum", () =>
 test("changing a decision and changing it back is recorded, not dropped as a repeat", () => {
   const { review, head } = setup({ version: 1 });
   happyPanel(review, head);
-  const sev = (label) => review.decide({ finding: "F1", kind: "finding-severity", label, probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  const sev = (label) => review.decide({ candidate: 1, kind: "finding-severity", label, probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
   sev("blocker");
   sev("nit");
   assert.equal(sev("blocker").changed, true);
@@ -343,7 +362,7 @@ test("a finding's author cannot rate, triage or place its own finding", () => {
   const { review, head } = setup({ version: 1 });
   happyPanel(review, head);
   for (const [kind, label] of [["finding-severity", "nit"], ["finding-triage", "agent-fixable"], ["finding-origin", "pre-existing"]]) {
-    assert.throws(() => review.decide({ finding: "F1", kind, label, probability: 0.9, rationale: "r", verifier: { model: SONNET }, head, actor: AGENT }), refused(REFUSED, ["verifier-not-independent"]), kind);
+    assert.throws(() => review.decide({ candidate: 1, kind, label, probability: 0.9, rationale: "r", verifier: { model: SONNET }, head, actor: AGENT }), refused(REFUSED, ["verifier-not-independent"]), kind);
   }
 });
 
@@ -422,21 +441,88 @@ test("the round cap counts new code: a restart because the target's policy chang
 
 test("a finding reported in an earlier round can be disposed in a later one", () => {
   const { repo, review, head } = setup({ version: 1 });
-  happyPanel(review, head);
-  for (const [kind, label] of [["finding-verification", "confirmed"], ["finding-severity", "should-fix"], ["finding-origin", "introduced"], ["finding-triage", "agent-fixable"]]) {
-    review.decide({ finding: "F1", kind, label, probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
-  }
-  review.decide({ finding: "F2", kind: "finding-verification", label: "refuted", probability: 0.1, rationale: "r", verifier: { model: OPUS }, head, actor: AGENT });
-  review.report({ actor: AGENT });
+  reportOne(review, head);
   repo.write("src/a.js", "fixed\n");
   repo.commit("fix");
   review.start({ git: repo.adapter, targetRef: "main", head: "feature", lenses: ["security"], actor: AGENT });
   // Mid-review in round 2, the round-1 finding turns out fixed.
-  const s = review.dispose({ finding: "F1", as: "fixed", actor: AGENT }).state;
-  assert.equal(s.findings.find((f) => f.id === "F1").disposition.as, "fixed");
-  // Clearing it is still a person's call, and an unreported finding still cannot be disposed.
-  assert.throws(() => review.dispose({ finding: "F1", as: "wrong", actor: AGENT }), (e) => e.code === "workflow/forbidden");
-  assert.throws(() => review.dispose({ finding: "F2", as: "fixed", actor: AGENT }), refused(REFUSED, ["not-reported"]));
+  const s = review.dispose({ finding: 1, as: "fixed", actor: AGENT }).state;
+  assert.equal(s.findings.find((f) => f.number === 1).disposition.as, "fixed");
+  // Clearing it is still a person's call, and a dropped candidate has no finding number.
+  assert.throws(() => review.dispose({ finding: 1, as: "wrong", actor: AGENT }), (e) => e.code === "workflow/forbidden");
+  assert.throws(() => review.dispose({ finding: 2, as: "fixed", actor: AGENT }), refused(REFUSED, ["unknown-finding"]));
+  assert.throws(() => review.dispose({ finding: "F1", as: "fixed", actor: AGENT }), refused(WORKFLOW_INVALID), "an internal key is not a number");
+});
+
+test("findings are numbered in report order when the round reports, and numbers continue across rounds", () => {
+  const { repo, review, head } = setup({ version: 1 });
+  // Candidate 1 is a nit and candidate 2 a blocker, so the report puts 2 first.
+  review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, findings: [finding(1)] });
+  review.recordRun({ slot: "security", status: "ok", model: GPT, head, actor: AGENT, findings: [finding(2)] });
+  review.advance({ actor: AGENT });
+  const rate = (candidate, severity, model, h = head) => {
+    for (const [kind, label] of [["finding-verification", "confirmed"], ["finding-severity", severity], ["finding-origin", "introduced"], ["finding-triage", "agent-fixable"]]) {
+      review.decide({ candidate, kind, label, probability: 0.9, rationale: "r", verifier: { model }, head: h, actor: AGENT });
+    }
+  };
+  rate(1, "nit", GPT);
+  rate(2, "blocker", OPUS);
+  let s = review.report({ actor: AGENT }).state;
+  assert.deepEqual(s.findings.map((f) => [f.candidate, f.number]), [[1, 2], [2, 1]], "the blocker is finding 1");
+  assert.deepEqual(next(s).report.findings, [{ n: 1, section: "blockers" }, { n: 2, section: "smaller" }]);
+
+  // Round 2: its candidates start again at 1; its findings continue at 3.
+  repo.write("src/a.js", "3\n");
+  const head2 = repo.commit("more");
+  review.start({ git: repo.adapter, targetRef: "main", head: "feature", lenses: ["security"], actor: AGENT });
+  review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head: head2, actor: AGENT, findings: [finding(3)] });
+  review.recordRun({ slot: "security", status: "ok", model: GPT, head: head2, actor: AGENT });
+  s = review.advance({ actor: AGENT }).state;
+  assert.deepEqual(next(s).action.findings.map((f) => f.candidate), [1]);
+  rate(1, "should-fix", GPT, head2);
+  s = review.report({ actor: AGENT }).state;
+  assert.deepEqual(s.findings.map((f) => [f.round, f.candidate, f.number]), [[1, 1, 2], [1, 2, 1], [2, 1, 3]], "earlier numbers do not change");
+  assert.equal(review.dispose({ finding: 1, as: "fixed", actor: AGENT }).changed, true, "finding 1 is still the round-1 blocker");
+});
+
+test("a log from before 0.3, without candidate or finding numbers, is numbered the same way", () => {
+  const root = stateRoot();
+  const repo = gitRepo({ version: 1 });
+  const review = openReview(root, REF);
+  review.start({ git: repo.adapter, targetRef: "main", head: "feature", lenses: ["security"], actor: AGENT });
+  const s = reportOne(review, repo.head, "blocker");
+  const old = openLog(root, REF).read().events.map((e) => {
+    const data = structuredClone(e.data);
+    if (e.type === "finding.added") delete data.candidate;
+    if (e.type === "review.reported") delete data.report.numbers;
+    return { ...e, data };
+  });
+  const rebuilt = old.reduce((state, e) => reduce(state, e), initialState());
+  assert.deepEqual(rebuilt.findings.map((f) => [f.candidate, f.number]), s.findings.map((f) => [f.candidate, f.number]));
+  assert.deepEqual(rebuilt.rounds[1].report.numbers, s.rounds[1].report.numbers);
+});
+
+test("no output names a finding by its internal key", () => {
+  const { review, head } = setup({ version: 1, independence: { verifier: "model" } });
+  happyPanel(review, head);
+  const key = /\bF[0-9]+\b/;
+  assert.doesNotMatch(JSON.stringify(next(review.read())), key, "verifying");
+  review.merge({ into: 1, duplicates: [2], actor: AGENT });
+  const v = (label, model) => review.decide({ candidate: 1, kind: "finding-verification", label, probability: 0.9, rationale: "r", verifier: { model }, head, actor: AGENT });
+  v("confirmed", GPT);
+  v("refuted", SONNET);
+  for (const kind of ["finding-severity", "finding-origin"]) review.decide({ candidate: 1, kind, label: kind === "finding-severity" ? "blocker" : "introduced", probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  const s = review.report({ actor: AGENT }).state;
+  for (const out of [next(s), publicState(s), inbox([{ ref: REF, state: s }])]) assert.doesNotMatch(JSON.stringify(out), key);
+  assert.equal(publicState(s).findings[1].duplicateOf, 1, "a duplicate points at its primary's candidate number");
+  const refusal = (() => {
+    try {
+      review.dispose({ finding: 1, as: "fixed", actor: AGENT });
+    } catch (e) {
+      return e;
+    }
+  })();
+  assert.doesNotMatch(JSON.stringify({ message: refusal.message, reasons: refusal.reasons }), key);
 });
 
 test("sparse lists and URLs that are not https URLs are refused before anything is written", () => {
@@ -449,10 +535,8 @@ test("sparse lists and URLs that are not https URLs are refused before anything 
   assert.throws(() => review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, findings: holes }), (e) => e.code === WORKFLOW_INVALID);
   review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, findings: [finding(1)] });
   for (const url of ["https://", "https://a b", "http://example.com", new URL("https://example.com/x")]) {
-    assert.throws(() => review.link({ finding: "F1", thread: "T1", url, actor: AGENT }), (e) => e.code === WORKFLOW_INVALID, String(url));
+    assert.throws(() => review.link({ finding: 1, thread: "T1", url, actor: AGENT }), (e) => e.code === WORKFLOW_INVALID, String(url));
   }
-  review.link({ finding: "F1", thread: "T1", url: "https://github.com/acme/widgets/pull/7#discussion_r1", actor: AGENT });
-  assert.equal(review.read().findings[0].thread.url, "https://github.com/acme/widgets/pull/7#discussion_r1");
 });
 
 test("findings keep their class, instances and axiom, and bad shapes are refused", () => {
@@ -469,14 +553,20 @@ test("findings keep their class, instances and axiom, and bad shapes are refused
   assert.equal(f.thread, null);
 });
 
-test("a finding can be linked to the host's review thread", () => {
+test("a finding can be linked to the host's review thread, by finding number", () => {
   const { review, head } = setup({ version: 1 });
   happyPanel(review, head);
-  assert.throws(() => review.link({ finding: "F9", thread: "PRRT_1", actor: AGENT }), refused(REFUSED, ["unknown-finding"]));
-  assert.throws(() => review.link({ finding: "F1", thread: "PRRT_1", url: "http://x", actor: AGENT }), (e) => e.code === WORKFLOW_INVALID);
-  review.link({ finding: "F1", thread: "PRRT_1", url: "https://github.com/acme/widgets/pull/7#discussion_r1", actor: AGENT });
-  assert.equal(review.link({ finding: "F1", thread: "PRRT_1", url: "https://github.com/acme/widgets/pull/7#discussion_r1", actor: AGENT }).changed, false);
-  const f = review.read().findings.find((x) => x.id === "F1");
+  assert.throws(() => review.link({ finding: 1, thread: "PRRT_1", actor: AGENT }), refused(REFUSED, ["unknown-finding"]), "nothing is numbered before the report");
+  review.decide({ candidate: 2, kind: "finding-verification", label: "refuted", probability: 0.1, rationale: "r", verifier: { model: OPUS }, head, actor: AGENT });
+  for (const [kind, label] of [["finding-verification", "confirmed"], ["finding-severity", "nit"], ["finding-origin", "introduced"], ["finding-triage", "agent-fixable"]]) {
+    review.decide({ candidate: 1, kind, label, probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  }
+  review.report({ actor: AGENT });
+  assert.throws(() => review.link({ finding: 9, thread: "PRRT_1", actor: AGENT }), refused(REFUSED, ["unknown-finding"]));
+  assert.throws(() => review.link({ finding: 1, thread: "PRRT_1", url: "http://x", actor: AGENT }), (e) => e.code === WORKFLOW_INVALID);
+  review.link({ finding: 1, thread: "PRRT_1", url: "https://github.com/acme/widgets/pull/7#discussion_r1", actor: AGENT });
+  assert.equal(review.link({ finding: 1, thread: "PRRT_1", url: "https://github.com/acme/widgets/pull/7#discussion_r1", actor: AGENT }).changed, false);
+  const f = review.read().findings.find((x) => x.number === 1);
   assert.deepEqual([f.thread.id, f.thread.url], ["PRRT_1", "https://github.com/acme/widgets/pull/7#discussion_r1"]);
 });
 

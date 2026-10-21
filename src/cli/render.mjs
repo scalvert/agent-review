@@ -1,6 +1,8 @@
 // Short text output for people. Agents get JSON; a person at a terminal gets
 // a few lines: where the review is, what happens next, and what needs them.
 const short = (sha) => (sha ? sha.slice(0, 12) : "");
+// "candidate 1", "candidates 1, 2".
+const named = (word, items, sep = ", ") => `${word}${items.length === 1 ? "" : "s"} ${items.join(sep)}`;
 
 function action(a) {
   if (!a) return "nothing; the review is complete";
@@ -12,19 +14,19 @@ function action(a) {
     case "advance":
       return "advance to verification";
     case "verify":
-      return `verify ${a.findings.map((f) => `${f.finding} (not ${f.verifierMust.notFamily ?? f.verifierMust.notModel})`).join(", ")}`;
+      return `verify ${named("candidate", a.findings.map((f) => `${f.candidate} (not ${f.verifierMust.notFamily ?? f.verifierMust.notModel})`))}`;
     case "decide":
-      return `decide ${a.findings.map((f) => `${f.finding}: ${f.kinds.map((k) => k.replace("finding-", "")).join(", ")}`).join("; ")}`;
+      return `decide on ${named("candidate", a.findings.map((f) => `${f.candidate}: ${f.kinds.map((k) => k.replace("finding-", "")).join(", ")}`), "; ")}`;
     case "classify":
       return "classify the change (review classify)";
     case "verify-again":
-      return `second verifier for ${a.findings.map((f) => f.finding).join(", ")}`;
+      return `second verifier for ${named("candidate", a.findings.map((f) => f.candidate))}`;
     case "report":
       return "write the report";
     case "resolve":
       return `a person resolves ${a.escalations.join(", ")}`;
     case "dispose":
-      return `a person decides ${a.findings.join(", ")} (review dispose)`;
+      return `a person decides ${named("finding", a.findings)} (review dispose)`;
     default:
       return a.do;
   }
@@ -38,7 +40,8 @@ export function renderNext(n) {
   for (const h of n.human ?? []) lines.push(`for a person: ${h.ask}${h.escalation ? ` (${h.escalation})` : ""}`);
   if (n.report) {
     const r = n.report;
-    lines.push(`report: ${r.reported.length} reported${r.reported.length ? ` (${r.reported.join(", ")})` : ""}, ${r.dropped.length} dropped, ${r.escalated.length} escalated${r.coverage.complete ? "" : `; coverage gaps: ${r.coverage.gaps.map((g) => g.slot).join(", ")}`}`);
+    const ns = r.findings.map((f) => f.n);
+    lines.push(`report: ${ns.length} reported${ns.length ? ` (${named("finding", ns)})` : ""}, ${r.dropped.length} dropped, ${r.disputed.length} disputed${r.coverage.complete ? "" : `; coverage gaps: ${r.coverage.gaps.map((g) => g.slot).join(", ")}`}`);
   }
   return lines.join("\n");
 }

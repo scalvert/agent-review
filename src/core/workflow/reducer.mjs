@@ -2,9 +2,10 @@
 // way whether a person or an agent wrote it.
 import { LEGACY_IMPORTED } from "../store/legacy-v1.mjs";
 import { WorkflowError, UNKNOWN_EVENT } from "./errors.mjs";
+import { numberReport } from "./numbers.mjs";
 
 // Bump when the state shape changes, so cached snapshots are rebuilt.
-export const REDUCER_VERSION = "review/4";
+export const REDUCER_VERSION = "review/5";
 
 export const initialState = () => ({
   legacy: [],
@@ -58,8 +59,23 @@ export function reduce(state, e) {
       current(s, d.round).gaps[d.slot] = { reason: d.reason, actor: e.actor, at: e.at };
       break;
     case "finding.added":
-      // Findings recorded by 0.1 have no class, instances or axiom.
-      s.findings.push({ class: null, instances: [], axiom: null, ...d.finding, id: d.id, round: d.round, author: d.author, duplicateOf: null, decisions: {}, disposition: null, thread: null });
+      // Findings recorded by 0.1 have no class, instances or axiom. Before
+      // 0.3 the event has no candidate number: it is the order in the round.
+      s.findings.push({
+        class: null,
+        instances: [],
+        axiom: null,
+        ...d.finding,
+        id: d.id,
+        round: d.round,
+        candidate: d.candidate ?? s.findings.filter((f) => f.round === d.round).length + 1,
+        number: null,
+        author: d.author,
+        duplicateOf: null,
+        decisions: {},
+        disposition: null,
+        thread: null,
+      });
       break;
     case "finding.linked":
       s.findings.find((x) => x.id === d.finding).thread = { id: d.thread, url: d.url, actor: e.actor, at: e.at };
@@ -80,10 +96,15 @@ export function reduce(state, e) {
     case "review.advanced":
       current(s, d.round).status = d.to;
       break;
-    case "review.reported":
+    case "review.reported": {
+      // Before 0.3 the report has no numbers. They are given here the same
+      // way the report gives them now, from the state at the report.
+      const numbers = d.report.numbers ?? numberReport(s, [...d.report.reported, ...d.report.escalated]);
+      for (const x of numbers) s.findings.find((f) => f.id === x.finding).number = x.n;
       current(s, d.round).status = "reported";
-      current(s, d.round).report = { ...d.report, at: e.at };
+      current(s, d.round).report = { ...d.report, numbers, at: e.at };
       break;
+    }
     case "escalation.raised":
       s.escalations.push({ id: d.id, round: d.round, code: d.code, message: d.message, path: d.path ?? null, finding: d.finding ?? null, status: "open", raisedAt: e.at, resolution: null });
       break;

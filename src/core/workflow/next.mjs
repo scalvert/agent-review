@@ -3,7 +3,12 @@
 // waiting on a person, with one short ask each, so nobody wades through
 // every finding.
 import { CATEGORIES } from "../policy/defaults.mjs";
+import { publicReport } from "./numbers.mjs";
 import { activeRound } from "./review.mjs";
+
+// A candidate as a verifier needs it: its number, what it claims and where.
+const candidate = (f) => ({ candidate: f.candidate, title: f.title, file: f.file, line: f.line });
+const where = (f) => `${f.file ?? "no file"}${f.line ? `:${f.line}` : ""}`;
 
 // Merge eligibility needs the change classified; ask for it only then.
 const needsClassification = (r) => r.policy.resolved.actions?.merge?.enabled === true && !r.classification;
@@ -13,7 +18,8 @@ const pendingSlots = (r) => r.plan.slots.filter((s) => r.runs[s.id]?.status !== 
 export function next(state) {
   const r = activeRound(state);
   const open = state.escalations.filter((x) => x.status === "open" && x.round === state.round);
-  const human = open.map((x) => ({ escalation: x.id, code: x.code, ask: x.message }));
+  const numberOf = (id) => state.findings.find((f) => f.id === id)?.number ?? null;
+  const human = open.map((x) => ({ escalation: x.id, code: x.code, ask: x.message, ...(x.finding ? { finding: numberOf(x.finding) } : {}) }));
 
   // Rounds so far, with imported v1 rounds, so a caller can see the round
   // cap coming. The cap itself comes from the trusted policy at start.
@@ -59,7 +65,7 @@ export function next(state) {
     const verify = findings
       .filter((f) => !(f.decisions["finding-verification"] ?? []).length)
       .map((f) => ({
-        finding: f.id,
+        ...candidate(f),
         author: f.author,
         verifierMust: policy.independence.verifier === "family" ? { notFamily: f.author.family } : { notModel: f.author.model },
       }));
@@ -75,10 +81,10 @@ export function next(state) {
       if (!confirmed && !disputed) continue;
       const wanted = disputed ? ["finding-severity", "finding-origin"] : ["finding-severity", "finding-origin", "finding-triage"];
       const kinds = wanted.filter((k) => !f.decisions[k]?.length);
-      if (kinds.length) decide.push({ finding: f.id, kinds, verifierMust: policy.independence.verifier === "family" ? { notFamily: f.author.family } : { notModel: f.author.model } });
+      if (kinds.length) decide.push({ ...candidate(f), kinds, author: f.author, verifierMust: policy.independence.verifier === "family" ? { notFamily: f.author.family } : { notModel: f.author.model } });
       if (disputed) continue;
       if (f.decisions["finding-severity"]?.at(-1)?.label === "blocker" && policy.independence.secondVerifierForBlockers && new Set(v.map((x) => x.verifier.model)).size < 2) {
-        again.push({ finding: f.id, verifierMust: { notModels: [f.author.model, ...v.map((x) => x.verifier.model)], ...(policy.independence.verifier === "family" ? { notFamily: f.author.family } : {}) } });
+        again.push({ ...candidate(f), author: f.author, verifierMust: { notModels: [f.author.model, ...v.map((x) => x.verifier.model)], ...(policy.independence.verifier === "family" ? { notFamily: f.author.family } : {}) } });
       }
     }
     if (decide.length) return { status: "verifying", ...base, waitingOn: "agent", action: { do: "decide", findings: decide }, human };
@@ -91,10 +97,11 @@ export function next(state) {
   // on reported findings still wait on a person, and are listed for them.
   const calls = state.findings
     .filter((f) => f.round === r.round && r.report.reported.includes(f.id) && !f.disposition && f.decisions["finding-triage"]?.at(-1)?.label === "needs-judgment")
-    .map((f) => ({ finding: f.id, code: "needs-judgment", ask: `${f.id}: ${f.title} (${f.file ?? "no file"}${f.line ? `:${f.line}` : ""}) needs your call` }));
-  if (open.length) return { status: "reported", ...base, waitingOn: "human", action: { do: "resolve", escalations: open.map((x) => x.id) }, human: [...human, ...calls], report: r.report };
-  if (needsClassification(r)) return { status: "complete", ...base, waitingOn: "agent", action: { do: "classify", categories: CATEGORIES }, human: calls, report: r.report };
-  return { status: "complete", ...base, waitingOn: calls.length ? "human" : null, action: calls.length ? { do: "dispose", findings: calls.map((c) => c.finding) } : null, human: calls, report: r.report };
+    .map((f) => ({ finding: f.number, code: "needs-judgment", ask: `finding ${f.number}, ${f.title} (${where(f)}), needs your call` }));
+  const report = publicReport(state, r.report);
+  if (open.length) return { status: "reported", ...base, waitingOn: "human", action: { do: "resolve", escalations: open.map((x) => x.id) }, human: [...human, ...calls], report };
+  if (needsClassification(r)) return { status: "complete", ...base, waitingOn: "agent", action: { do: "classify", categories: CATEGORIES }, human: calls, report };
+  return { status: "complete", ...base, waitingOn: calls.length ? "human" : null, action: calls.length ? { do: "dispose", findings: calls.map((c) => c.finding) } : null, human: calls, report };
 }
 
 // reviews: [{ ref: { repo, key }, state }]

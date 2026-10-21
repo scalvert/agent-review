@@ -21,6 +21,7 @@ import { CONFLICT } from "../store/errors.mjs";
 import { openLog } from "../store/event-log.mjs";
 import { DECISION_KINDS, DISPOSITIONS, MODEL, RUNNER_KINDS, RUN_STATUSES, defaultFamily } from "./kinds.mjs";
 import { FORBIDDEN, INVALID, REFUSED, STALE, WorkflowError } from "./errors.mjs";
+import { numberReport } from "./numbers.mjs";
 import { REDUCER_VERSION, initialState, reduce } from "./reducer.mjs";
 
 const MAX_ATTEMPTS = 8;
@@ -43,6 +44,28 @@ function checkActor(actor, { human = false } = {}) {
 
 function checkModel(model, what) {
   if (typeof model !== "string" || !MODEL.test(model)) invalid(`${what} must be provider/model, such as anthropic/opus, got ${JSON.stringify(model)}`);
+}
+
+// Findings are named by number: a candidate number before the report, a
+// finding number after it (see numbers.mjs). Never by internal key.
+function checkNumber(n, what) {
+  if (!Number.isInteger(n) || n < 1) invalid(`${what} must be a number from 1, as the harness shows it, got ${JSON.stringify(n)}`);
+}
+
+const candidatesIn = (state, r) => state.findings.filter((f) => f.round === r.round);
+const numbered = (state) => state.findings.filter((f) => f.number !== null).map((f) => f.number);
+const listOf = (ns) => (ns.length ? ns.join(", ") : "none");
+
+function candidateOf(state, r, n) {
+  const f = candidatesIn(state, r).find((x) => x.candidate === n);
+  if (!f) refuse(`no candidate ${n} in round ${r.round}`, [reason("unknown-candidate", `candidates in round ${r.round}: ${listOf(candidatesIn(state, r).map((x) => x.candidate))}`, { candidate: n })]);
+  return f;
+}
+
+function findingOf(state, n) {
+  const f = state.findings.find((x) => x.number === n);
+  if (!f) refuse(`no finding ${n}`, [reason("unknown-finding", `findings in this review: ${listOf(numbered(state))}`, { finding: n })]);
+  return f;
 }
 
 export const activeRound = (state) => (state.round ? state.rounds[state.round] : null);
@@ -222,6 +245,7 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
 
       const events = [{ type: "run.recorded", actor, data: record }];
       let n = state.findings.length;
+      let candidate = candidatesIn(state, r).length;
       for (const f of findings) {
         const finding = {
           title: f.title,
@@ -235,7 +259,7 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
           axiom: f.axiom ?? null,
           lens: planned.lens,
         };
-        events.push({ type: "finding.added", actor, data: { round: r.round, id: `F${++n}`, author: { slot, model, family: fam }, finding } });
+        events.push({ type: "finding.added", actor, data: { round: r.round, id: `F${++n}`, candidate: ++candidate, author: { slot, model, family: fam }, finding } });
       }
       return events;
     }, { opId });
@@ -282,8 +306,9 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
     }, { opId });
   }
 
-  function decide({ finding, kind, label, probability, rationale = null, verifier, head, actor, opId }) {
+  function decide({ candidate, kind, label, probability, rationale = null, verifier, head, actor, opId }) {
     checkActor(actor);
+    checkNumber(candidate, "candidate");
     if (!DECISION_KINDS[kind]) invalid(`kind must be one of ${Object.keys(DECISION_KINDS).join(", ")}, got ${JSON.stringify(kind)}`);
     if (!DECISION_KINDS[kind].includes(label)) invalid(`${kind} label must be one of ${DECISION_KINDS[kind].join(", ")}, got ${JSON.stringify(label)}`);
     if (typeof probability !== "number" || !(probability >= 0 && probability <= 1)) invalid(`probability must be from 0 to 1, got ${JSON.stringify(probability)}`);
@@ -292,9 +317,12 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
     return mutate((state) => {
       const r = liveRound(state, { statuses: ["verifying"] });
       checkHead(r, head);
-      const f = state.findings.find((x) => x.id === finding);
-      if (!f || f.round !== r.round) refuse(`no finding ${JSON.stringify(finding)} in round ${r.round}`, [reason("unknown-finding", `finding ${finding} is not part of this round`)]);
-      if (f.duplicateOf) refuse(`finding ${finding} is a duplicate`, [reason("duplicate", `${finding} was merged into ${f.duplicateOf}; decide on ${f.duplicateOf}`)]);
+      const f = candidateOf(state, r, candidate);
+      const finding = f.id;
+      if (f.duplicateOf) {
+        const into = state.findings.find((x) => x.id === f.duplicateOf).candidate;
+        refuse(`candidate ${candidate} is a duplicate`, [reason("duplicate", `candidate ${candidate} was merged into candidate ${into}; decide on ${into}`, { candidate, into })]);
+      }
       const policy = r.policy.resolved;
       const problems = [];
       if (policy.evidence.decision.includes("rationale") && !(typeof rationale === "string" && rationale.trim())) {
@@ -320,33 +348,38 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       }
       if (kind === "finding-verification") {
         if (earlier.some((x) => x.verifier.model === verifier.model)) {
-          problems.push(reason("verifier-repeated", `${verifier.model} already verified ${finding}; a second verification needs a different model`));
+          problems.push(reason("verifier-repeated", `${verifier.model} already verified candidate ${candidate}; a second verification needs a different model`));
         }
       }
-      if (problems.length) refuse(`the ${kind} decision on ${finding} was not recorded`, problems);
+      if (problems.length) refuse(`the ${kind} decision on candidate ${candidate} was not recorded`, problems);
       return [{ type: "decision.recorded", actor, data: decision }];
     }, { opId });
   }
 
-  function merge({ into, ids, actor, opId }) {
+  // Mark candidates as duplicates of a primary candidate, by candidate number.
+  function merge({ into, duplicates, actor, opId }) {
     checkActor(actor);
-    if (!Array.isArray(ids) || ids.length === 0) invalid("merge needs the IDs of the duplicates");
+    checkNumber(into, "into");
+    if (!Array.isArray(duplicates) || duplicates.length === 0) invalid("merge needs the candidate numbers of the duplicates");
+    for (const n of duplicates) checkNumber(n, "each duplicate");
     return mutate((state) => {
       const r = liveRound(state, { statuses: ["reviewing", "verifying"] });
-      const inRound = (id) => state.findings.find((f) => f.id === id && f.round === r.round);
+      const inRound = (n) => candidatesIn(state, r).find((f) => f.candidate === n);
+      const candidateOfId = (id) => state.findings.find((f) => f.id === id).candidate;
       const primary = inRound(into);
       const problems = [];
-      if (!primary) problems.push(reason("unknown-finding", `finding ${into} is not part of this round`));
-      else if (primary.duplicateOf) problems.push(reason("duplicate", `${into} is itself a duplicate of ${primary.duplicateOf}`));
-      for (const id of ids) {
-        const f = inRound(id);
-        if (!f) problems.push(reason("unknown-finding", `finding ${id} is not part of this round`));
-        else if (id === into) problems.push(reason("self-merge", `${id} cannot be merged into itself`));
-        else if (Object.keys(f.decisions).length) problems.push(reason("has-decisions", `${id} already has decisions; merge duplicates before verifying`));
+      const unknown = (n) => reason("unknown-candidate", `candidate ${n} is not part of round ${r.round}; candidates: ${listOf(candidatesIn(state, r).map((f) => f.candidate))}`, { candidate: n });
+      if (!primary) problems.push(unknown(into));
+      else if (primary.duplicateOf) problems.push(reason("duplicate", `candidate ${into} is itself a duplicate of candidate ${candidateOfId(primary.duplicateOf)}`, { candidate: into }));
+      for (const n of duplicates) {
+        const f = inRound(n);
+        if (!f) problems.push(unknown(n));
+        else if (n === into) problems.push(reason("self-merge", `candidate ${n} cannot be merged into itself`, { candidate: n }));
+        else if (Object.keys(f.decisions).length) problems.push(reason("has-decisions", `candidate ${n} already has decisions; merge duplicates before verifying`, { candidate: n }));
       }
       if (problems.length) refuse("the merge was not recorded", problems);
-      const todo = ids.filter((id) => inRound(id).duplicateOf !== into);
-      return todo.length ? [{ type: "finding.merged", actor, data: { round: r.round, into, ids: todo } }] : [];
+      const todo = duplicates.map(inRound).filter((f) => f.duplicateOf !== primary.id).map((f) => f.id);
+      return todo.length ? [{ type: "finding.merged", actor, data: { round: r.round, into: primary.id, ids: [...new Set(todo)] } }] : [];
     }, { opId });
   }
 
@@ -359,17 +392,18 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
     const escalate = [];
     for (const f of state.findings.filter((x) => x.round === r.round && !x.duplicateOf)) {
       const v = f.decisions["finding-verification"] ?? [];
+      const c = { candidate: f.candidate };
       if (v.length === 0) {
-        missing.push(reason("unverified", `${f.id} has no verification`, { finding: f.id }));
+        missing.push(reason("unverified", `candidate ${f.candidate} has no verification`, c));
         continue;
       }
       const labels = new Set(v.map((x) => x.label));
       if (labels.size > 1) {
         // A person settles the dispute, so the finding needs its severity and
         // origin first: if they say it is real, those decide what it blocks.
-        if (!f.decisions["finding-severity"]?.length) missing.push(reason("no-severity", `${f.id} is disputed and has no severity; rate it so a person can settle it`, { finding: f.id }));
-        if (!f.decisions["finding-origin"]?.length) missing.push(reason("no-origin", `${f.id} is disputed and has no origin`, { finding: f.id }));
-        escalate.push({ finding: f.id, code: "verifiers-disagree", message: `verifiers disagree on ${f.id} (${v.map((x) => `${x.verifier.model}: ${x.label}`).join(", ")}); a person decides whether it is real` });
+        if (!f.decisions["finding-severity"]?.length) missing.push(reason("no-severity", `candidate ${f.candidate} is disputed and has no severity; rate it so a person can settle it`, c));
+        if (!f.decisions["finding-origin"]?.length) missing.push(reason("no-origin", `candidate ${f.candidate} is disputed and has no origin`, c));
+        escalate.push({ finding: f.id, code: "verifiers-disagree", verdicts: v.map((x) => `${x.verifier.model}: ${x.label}`).join(", ") });
         continue;
       }
       const confirmed = labels.has("confirmed") && Math.min(...v.map((x) => x.probability)) >= policy.thresholds.report;
@@ -378,10 +412,10 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
         continue;
       }
       const sev = f.decisions["finding-severity"]?.at(-1)?.label;
-      if (!sev) missing.push(reason("no-severity", `${f.id} is confirmed but has no severity`, { finding: f.id }));
-      if (!f.decisions["finding-origin"]?.length) missing.push(reason("no-origin", `${f.id} is confirmed but has no origin`, { finding: f.id }));
+      if (!sev) missing.push(reason("no-severity", `candidate ${f.candidate} is confirmed but has no severity`, c));
+      if (!f.decisions["finding-origin"]?.length) missing.push(reason("no-origin", `candidate ${f.candidate} is confirmed but has no origin`, c));
       if (sev === "blocker" && policy.independence.secondVerifierForBlockers && new Set(v.map((x) => x.verifier.model)).size < 2) {
-        missing.push(reason("second-verifier", `${f.id} is a blocker; the policy needs a second verifier from a different model`, { finding: f.id }));
+        missing.push(reason("second-verifier", `candidate ${f.candidate} is a blocker; the policy needs a second verifier from a different model`, c));
       }
       reported.push(f.id);
     }
@@ -394,16 +428,23 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       const r = liveRound(state, { statuses: ["verifying"] });
       const p = reportPlan(state, r);
       if (p.missing.length) refuse("the report is not ready", p.missing);
+      const escalated = p.escalate.map((x) => x.finding);
+      // Reported and disputed findings get their numbers now, so the person
+      // settling a dispute and the report name findings the same way.
+      const numbers = numberReport(state, [...p.reported, ...escalated]);
+      const numberOf = (id) => numbers.find((x) => x.finding === id).n;
       let n = state.escalations.length;
       const open = new Set(state.escalations.filter((x) => x.round === r.round && x.finding).map((x) => x.finding));
-      const events = p.escalate
-        .filter((x) => !open.has(x.finding))
-        .map((x) => ({ type: "escalation.raised", actor: "agent:harness", data: { id: `E${++n}`, round: r.round, code: x.code, message: x.message, finding: x.finding } }));
+      const events = p.escalate.filter((x) => !open.has(x.finding)).map((x) => {
+        const f = state.findings.find((y) => y.id === x.finding);
+        const message = `verifiers disagree on finding ${numberOf(x.finding)}, ${f.title} (${x.verdicts}); a person decides whether it is real`;
+        return { type: "escalation.raised", actor: "agent:harness", data: { id: `E${++n}`, round: r.round, code: x.code, message, finding: x.finding } };
+      });
       const gaps = Object.entries(r.gaps).map(([slot, g]) => ({ slot, reason: g.reason, acceptedBy: g.actor }));
       events.push({
         type: "review.reported",
         actor,
-        data: { round: r.round, report: { reported: p.reported, dropped: p.dropped, escalated: p.escalate.map((x) => x.finding), coverage: { complete: gaps.length === 0, gaps } } },
+        data: { round: r.round, report: { reported: p.reported, dropped: p.dropped, escalated, numbers, coverage: { complete: gaps.length === 0, gaps } } },
       });
       return events;
     }, { opId });
@@ -431,19 +472,22 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
   // one: a follow-up round is often where an older finding turns out fixed.
   // A finding triaged needs-judgment is a person's call, so only a person can
   // dispose of it.
-  function dispose({ finding, as, note = null, actor, opId }) {
+  function dispose({ finding: number, as, note = null, actor, opId }) {
     checkActor(actor);
+    checkNumber(number, "finding");
     if (!DISPOSITIONS.includes(as)) invalid(`disposition must be one of ${DISPOSITIONS.join(", ")}, got ${JSON.stringify(as)}`);
     return mutate((state) => {
       if (!activeRound(state)) refuse("no review has started", [reason("not-started", "start a review first")]);
-      const f = state.findings.find((x) => x.id === finding);
-      const r = f ? state.rounds[f.round] : null;
-      // Reported findings, and disputed findings a person said are real.
-      const approved = state.escalations.some((x) => x.round === f?.round && x.finding === finding && x.status === "approved");
-      const open = Boolean(r?.report) && (r.report.reported.includes(finding) || (r.report.escalated.includes(finding) && approved));
-      if (!open) {
-        const all = Object.values(state.rounds).flatMap((x) => x.report?.reported ?? []);
-        refuse(`${finding} is not a reported finding`, [reason("not-reported", `reported findings: ${all.join(", ") || "none"}`)]);
+      const f = findingOf(state, number);
+      const finding = f.id;
+      const r = state.rounds[f.round];
+      // Reported findings, and disputed findings a person said are real. A
+      // numbered finding that is neither is a dispute still open, or one a
+      // person rejected.
+      const dispute = state.escalations.find((x) => x.round === f.round && x.finding === finding);
+      if (!r.report.reported.includes(finding) && dispute?.status !== "approved") {
+        const why = dispute?.status === "rejected" ? `a person settled finding ${number} as not a problem` : `verifiers disagree on finding ${number}; a person settles that first${dispute ? ` (review resolve --escalation ${dispute.id})` : ""}`;
+        refuse(`finding ${number} is not open`, [reason(dispute?.status === "rejected" ? "dispute-rejected" : "disputed", why, { finding: number })]);
       }
       if (f.decisions["finding-triage"]?.at(-1)?.label === "needs-judgment") checkActor(actor, { human: true });
       // Clearing a finding that would block a merge overrides an
@@ -481,15 +525,15 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
 
   // Record the host's review thread that carries a finding, such as a GitHub
   // pull request comment, so replies in that thread can be traced back to it.
-  function link({ finding, thread, url = null, actor, opId }) {
+  function link({ finding: number, thread, url = null, actor, opId }) {
     checkActor(actor);
+    checkNumber(number, "finding");
     if (typeof thread !== "string" || !thread.trim()) invalid("link needs a thread ID");
     if (url != null && !isHttpsUrl(url)) invalid(`url must be an https URL, got ${JSON.stringify(url)}`);
     return mutate((state) => {
-      const f = state.findings.find((x) => x.id === finding);
-      if (!f) refuse(`no finding ${JSON.stringify(finding)}`, [reason("unknown-finding", `finding ${finding} is not in this review`)]);
+      const f = findingOf(state, number);
       if (f.thread?.id === thread && f.thread.url === url) return [];
-      return [{ type: "finding.linked", actor, data: { finding, thread, url } }];
+      return [{ type: "finding.linked", actor, data: { finding: f.id, thread, url } }];
     }, { opId });
   }
 

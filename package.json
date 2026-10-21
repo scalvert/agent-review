@@ -1,6 +1,6 @@
 {
   "name": "agent-review",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "A policy-driven code review harness that people and AI agents run through the same commands.",
   "type": "module",

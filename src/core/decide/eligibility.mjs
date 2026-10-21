@@ -136,10 +136,12 @@ export function evaluateEligibility({ state, facts }) {
       const f = byId.get(id);
       const sev = f.decisions["finding-severity"]?.at(-1)?.label ?? null;
       if (f.disposition && CLEARED.has(f.disposition.as)) continue;
+      // Findings are named by their report number, never their internal key.
+      const n = f.number;
       if (f.decisions["finding-triage"]?.at(-1)?.label === "needs-judgment" && !f.disposition) {
-        reasons.push(escalate("needs-judgment", `${id} needs a person's call: ${f.title}`, { finding: id }));
+        reasons.push(escalate("needs-judgment", `finding ${n} needs a person's call: ${f.title}`, { finding: n }));
       } else if (sev === null || merge.disqualifying.includes(sev)) {
-        reasons.push(block("disqualifying-finding", `${id} (${sev ?? "unrated"}) is unresolved${f.disposition ? ` (${f.disposition.as})` : ""}: ${f.title}`, { finding: id }));
+        reasons.push(block("disqualifying-finding", `finding ${n} (${sev ?? "unrated"}) is unresolved${f.disposition ? ` (${f.disposition.as})` : ""}: ${f.title}`, { finding: n }));
       }
     }
   }

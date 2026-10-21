@@ -15,12 +15,12 @@ The harness owns the review lifecycle, the evidence each step needs, the reposit
 
 ## Status
 
-Version 0.2. The design is settled, but it has had little use outside one person's work, and the JSON output and policy format may change before 1.0. [scalvert/skills](https://github.com/scalvert/skills) bundles it into its review skills.
+Version 0.3. The design is settled, but it has had little use outside one person's work, and the JSON output and policy format may change before 1.0. [scalvert/skills](https://github.com/scalvert/skills) bundles it into its review skills.
 
 It is not on npm. Install it from a tag:
 
 ```sh
-npm install github:scalvert/agent-review#v0.2.0
+npm install github:scalvert/agent-review#v0.3.0
 ```
 
 ## Quick start
