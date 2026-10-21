@@ -79,7 +79,10 @@ export function parsePolicy(bytes, source = { kind: "file", path: POLICY_FILE })
   }
   const errors = validateV1(declared);
   if (errors.length) throw new PolicyError(INVALID, `${where}: invalid policy`, errors);
-  const policy = merge(DEFAULT_POLICY, declared);
+  // $schema is for editors. Leaving it out of the resolved policy keeps the
+  // effective digest the same when only the schema URL changes.
+  const { $schema: _schema, ...settings } = declared;
+  const policy = merge(DEFAULT_POLICY, settings);
   return {
     policy,
     declared,

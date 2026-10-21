@@ -66,7 +66,7 @@ test("a valid path reaches a complete review, with provenance for every step", (
   ]);
   review.decide({ finding: "F1", kind: "finding-verification", label: "confirmed", probability: 0.9, rationale: "reproduced", verifier: { model: GPT }, head, actor: AGENT });
   review.decide({ finding: "F2", kind: "finding-verification", label: "refuted", probability: 0.2, rationale: "guarded at a.js:3", verifier: { model: OPUS }, head, actor: AGENT });
-  assert.deepEqual(next(review.read()).action, { do: "classify", findings: [{ finding: "F1", kinds: ["finding-severity", "finding-origin", "finding-triage"] }] });
+  assert.deepEqual(next(review.read()).action, { do: "decide", findings: [{ finding: "F1", kinds: ["finding-severity", "finding-origin", "finding-triage"], verifierMust: { notFamily: "anthropic" } }] });
   for (const [kind, label] of [["finding-severity", "should-fix"], ["finding-origin", "introduced"], ["finding-triage", "agent-fixable"]]) {
     review.decide({ finding: "F1", kind, label, probability: 0.8, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
   }
@@ -201,6 +201,10 @@ test("verifiers that disagree go to a person; only a person resolves it", () => 
   v("F1", GPT, "confirmed");
   v("F1", SONNET, "refuted", 0.3);
   v("F2", OPUS, "refuted", 0.2);
+  assert.throws(() => review.report({ actor: AGENT }), refused(REFUSED, ["no-severity", "no-origin"]), "a disputed finding is rated before a person settles it");
+  for (const [kind, label] of [["finding-severity", "should-fix"], ["finding-origin", "introduced"]]) {
+    review.decide({ finding: "F1", kind, label, probability: 0.8, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  }
   const s = review.report({ actor: AGENT }).state;
   const n = next(s);
   assert.equal(n.status, "reported");
@@ -333,6 +337,39 @@ test("changing a decision and changing it back is recorded, not dropped as a rep
   assert.equal(sev("blocker").changed, true);
   assert.equal(review.read().findings[0].decisions["finding-severity"].at(-1).label, "blocker");
   assert.equal(sev("blocker").changed, false, "repeating what stands now is a no-op");
+});
+
+test("a finding's author cannot rate, triage or place its own finding", () => {
+  const { review, head } = setup({ version: 1 });
+  happyPanel(review, head);
+  for (const [kind, label] of [["finding-severity", "nit"], ["finding-triage", "agent-fixable"], ["finding-origin", "pre-existing"]]) {
+    assert.throws(() => review.decide({ finding: "F1", kind, label, probability: 0.9, rationale: "r", verifier: { model: SONNET }, head, actor: AGENT }), refused(REFUSED, ["verifier-not-independent"]), kind);
+  }
+});
+
+test("a retry with --op-id returns the earlier result, even after the review moved on", () => {
+  const { review, head } = setup({ version: 1 });
+  review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, opId: "run-1" });
+  review.recordRun({ slot: "security", status: "ok", model: GPT, head, actor: AGENT, opId: "run-2" });
+  const first = review.advance({ actor: AGENT, opId: "adv-1" });
+  assert.equal(first.changed, true);
+  const again = review.advance({ actor: AGENT, opId: "adv-1" });
+  assert.equal(again.changed, false, "a lost response can be retried safely");
+  assert.deepEqual(again.seqs, first.seqs);
+  assert.equal(review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT, opId: "run-1" }).changed, false, "a run retried after the review advanced");
+  assert.throws(() => review.advance({ actor: AGENT }), refused(REFUSED, ["wrong-state"]), "without an op ID, advancing twice is still refused");
+});
+
+test("next asks for the change's classification when merge eligibility is on", () => {
+  const policy = { version: 1, actions: { merge: { enabled: true, rules: [{ name: "docs", categories: ["docs"], authors: ["bot"], paths: ["**"] }] } } };
+  const { review, head } = setup(policy);
+  review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head, actor: AGENT });
+  review.recordRun({ slot: "security", status: "ok", model: GPT, head, actor: AGENT });
+  const n = next(review.advance({ actor: AGENT }).state);
+  assert.equal(n.action.do, "classify");
+  assert.ok(n.action.categories.includes("deps-patch"));
+  review.classify({ category: "docs", probability: 0.9, rationale: "r", classifier: { model: GPT }, head, actor: AGENT });
+  assert.equal(next(review.read()).action.do, "report");
 });
 
 test("actors are required and must say whether they are a person or an agent", () => {

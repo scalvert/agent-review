@@ -21,6 +21,9 @@ export const ESCALATE = "escalate";
 // Dispositions that say a reported finding is not a problem for this head.
 const CLEARED = new Set(["wrong", "intended", "not-worth-it"]);
 
+// The committer GitHub records for commits it creates and signs itself.
+export const HOST_COMMITTER = "web-flow";
+
 const block = (code, message, extra = {}) => ({ effect: BLOCKED, code, message, ...extra });
 const escalate = (code, message, extra = {}) => ({ effect: ESCALATE, code, message, ...extra });
 
@@ -35,9 +38,15 @@ function ruleReasons(rule, { facts, classification }) {
   if (r.requireVerifiedCommits) {
     const commits = facts.commits ?? [];
     if (commits.length === 0) out.push("the commits are unknown");
+    if (facts.commitsComplete === false) out.push("the host listed only part of the commits, so not all can be checked");
     for (const c of commits) {
-      if (c.verified !== true) out.push(`commit ${String(c.sha).slice(0, 12)} has no verified signature`);
-      if (!c.author || !r.authors.includes(c.author)) out.push(`commit ${String(c.sha).slice(0, 12)} was authored by ${c.author ?? "an unknown account"}`);
+      const sha = String(c.sha).slice(0, 12);
+      if (c.verified !== true) out.push(`commit ${sha} has no verified signature`);
+      if (!c.author || !r.authors.includes(c.author)) out.push(`commit ${sha} was authored by ${c.author ?? "an unknown account"}`);
+      // A verified signature only says the committer signed it. A bot's own
+      // commits are committed and signed by the host (web-flow); a commit
+      // someone else signed, with the bot's author email, is not.
+      if (c.committer !== HOST_COMMITTER) out.push(`commit ${sha} was committed by ${c.committer ?? "an unknown account"}, not signed by the host`);
     }
   }
   const paths = facts.changedPaths ?? [];
@@ -46,11 +55,12 @@ function ruleReasons(rule, { facts, classification }) {
   for (const p of paths) if (!allowed.has(p)) out.push(`${p} is outside the rule's paths`);
   if (r.dependencies === "patch") {
     const changes = facts.dependencyChanges;
-    if (!Array.isArray(changes) || changes.length === 0) out.push("no dependency changes were found, so none can be shown to be patch updates");
+    if (!Array.isArray(changes) || changes.length === 0) out.push("there is no usable dependency evidence (no changes found, or a lockfile format the harness cannot read), so none can be shown to be patch updates");
     else {
       for (const d of changes) {
         const kind = d.change === "changed" ? versionChange(d.from, d.to) : d.change;
-        if (kind !== "patch") out.push(`${d.name} ${d.from ?? "(none)"} -> ${d.to ?? "(none)"} is ${kind}, not a patch update`);
+        if (kind === "other" && d.detail) out.push(`${d.name} (${d.source}): ${d.detail}, so it is not a patch update`);
+        else if (kind !== "patch") out.push(`${d.name} ${d.from ?? "(none)"} -> ${d.to ?? "(none)"} is ${kind}, not a patch update`);
       }
     }
   }
@@ -75,6 +85,10 @@ export function evaluateEligibility({ state, facts }) {
       approvals: facts.approvals ?? null,
     },
     factsDigest: digestOf(facts),
+    // Where the facts came from: "github" when the harness fetched them,
+    // otherwise whatever the caller said (a file is "file"). Only fetched
+    // facts make a real decision; anything else is a simulation.
+    factsSource: facts.source ?? "caller",
     rule: null,
   };
   const done = (outcome) => ({ outcome, reasons, provenance });
@@ -93,6 +107,11 @@ export function evaluateEligibility({ state, facts }) {
   if (facts.head !== r.binding.head) reasons.push(block("head-changed", `the head is now ${String(facts.head).slice(0, 12)}; the review covers ${r.binding.head.slice(0, 12)}`));
   if (facts.mergeBase !== r.binding.mergeBase) reasons.push(block("merge-base-changed", `the merge base is now ${String(facts.mergeBase).slice(0, 12)}; the review covers ${r.binding.mergeBase.slice(0, 12)}`));
   if (facts.policyDigest !== r.binding.policyDigest) reasons.push(block("policy-changed", "the trusted policy changed since the review started"));
+  // The policy and merge base come from a local ref. If it is not where the
+  // host says the target is, they may be stale or doctored.
+  if (facts.target?.commit && facts.localTarget?.commit && facts.target.commit !== facts.localTarget.commit) {
+    reasons.push(block("target-not-fetched", `the local ${facts.localTarget.ref} is at ${facts.localTarget.commit.slice(0, 12)}, but the host's ${facts.target.ref} is at ${facts.target.commit.slice(0, 12)}; fetch it, then start the review again`));
+  }
 
   const policy = r.policy.resolved;
   // A round stores the policy as resolved when it started. Rounds from older
@@ -103,7 +122,9 @@ export function evaluateEligibility({ state, facts }) {
   const open = state.escalations.filter((x) => x.round === r.round && x.status === "open");
   if (r.status !== "reported") reasons.push(block("review-incomplete", `the review is ${r.status}, not reported`));
   for (const x of open) reasons.push(escalate("escalation-open", `${x.id} is open: ${x.message}`, { escalation: x.id }));
-  for (const x of state.escalations.filter((y) => y.round === r.round && y.status === "rejected")) {
+  // A rejected dispute about a finding means the finding is not a problem;
+  // it does not block. Any other rejected escalation does.
+  for (const x of state.escalations.filter((y) => y.round === r.round && y.status === "rejected" && !y.finding)) {
     reasons.push(block("escalation-rejected", `${x.id} was rejected by ${x.resolution.actor}: ${x.resolution.reason}`, { escalation: x.id }));
   }
 
@@ -146,7 +167,9 @@ export function evaluateEligibility({ state, facts }) {
   else if (facts.branchProtection.satisfied !== true) reasons.push(block("branch-protection", "branch protection is not satisfied"));
 
   // A rule must match. Without one, the change merges by hand.
-  if (merge.enabled) {
+  // Without a classification no rule can match, but the right outcome is
+  // to classify the change, so it escalates rather than blocks.
+  if (merge.enabled && c) {
     const misses = [];
     const hit = merge.rules.find((rule) => {
       const why = ruleReasons(rule, { facts, classification: c });

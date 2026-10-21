@@ -24,6 +24,8 @@ import { FORBIDDEN, INVALID, REFUSED, STALE, WorkflowError } from "./errors.mjs"
 import { REDUCER_VERSION, initialState, reduce } from "./reducer.mjs";
 
 const MAX_ATTEMPTS = 8;
+// Dispositions that say a finding is not a problem.
+const CLEARING = ["wrong", "intended", "not-worth-it"];
 const ACTOR = /^(human|agent):[^\s]/;
 
 const reason = (code, message, extra = {}) => ({ code, message, ...extra });
@@ -67,7 +69,14 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
   // Read, decide, append if nothing moved; otherwise read and decide again.
   function mutate(decideEvents, { opId } = {}) {
     for (let attempt = 1; ; attempt++) {
-      const { seq, state } = log.read();
+      const { seq, state, events: logged } = log.read();
+      // An operation ID names one operation. If it already ran, return its
+      // result, before any state check: the review may have moved on since,
+      // and a retry of a step that succeeded must not be refused.
+      if (opId !== undefined) {
+        const done = logged.filter((e) => e.op.id === opId);
+        if (done.length) return { state, changed: false, seqs: done.map((e) => e.seq) };
+      }
       const events = decideEvents(structuredClone(state));
       if (events.length === 0) return { state, changed: false };
       try {
@@ -252,13 +261,16 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       // it is the latest decision, so changing a label and changing it back
       // is recorded, not dropped.
       if (kind === "finding-verification" ? earlier.some(same) : same(earlier.at(-1))) return [];
+      // Every judgment about a finding, not only verification, comes from a
+      // model independent of its author. Otherwise the author could rate its
+      // own finding a nit, or triage away a judgment call.
+      const independence = policy.independence.verifier;
+      if (verifier.model === f.author.model) {
+        problems.push(reason("verifier-not-independent", `${verifier.model} wrote this finding; a different model must make the ${kind} decision`, { author: f.author, verifier: decision.verifier }));
+      } else if (independence === "family" && fam === f.author.family) {
+        problems.push(reason("verifier-not-independent", `${verifier.model} is in the author's family (${fam}); the policy needs a model from another family for the ${kind} decision`, { author: f.author, verifier: decision.verifier }));
+      }
       if (kind === "finding-verification") {
-        const independence = policy.independence.verifier;
-        if (verifier.model === f.author.model) {
-          problems.push(reason("verifier-not-independent", `the verifier ${verifier.model} wrote this finding; a different model must verify it`, { author: f.author, verifier: decision.verifier }));
-        } else if (independence === "family" && fam === f.author.family) {
-          problems.push(reason("verifier-not-independent", `the verifier ${verifier.model} is in the author's family (${fam}); the policy needs a verifier from another family`, { author: f.author, verifier: decision.verifier }));
-        }
         if (earlier.some((x) => x.verifier.model === verifier.model)) {
           problems.push(reason("verifier-repeated", `${verifier.model} already verified ${finding}; a second verification needs a different model`));
         }
@@ -305,7 +317,11 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       }
       const labels = new Set(v.map((x) => x.label));
       if (labels.size > 1) {
-        escalate.push({ finding: f.id, code: "verifiers-disagree", message: `verifiers disagree on ${f.id} (${v.map((x) => `${x.verifier.model}: ${x.label}`).join(", ")}); a person decides` });
+        // A person settles the dispute, so the finding needs its severity and
+        // origin first: if they say it is real, those decide what it blocks.
+        if (!f.decisions["finding-severity"]?.length) missing.push(reason("no-severity", `${f.id} is disputed and has no severity; rate it so a person can settle it`, { finding: f.id }));
+        if (!f.decisions["finding-origin"]?.length) missing.push(reason("no-origin", `${f.id} is disputed and has no origin`, { finding: f.id }));
+        escalate.push({ finding: f.id, code: "verifiers-disagree", message: `verifiers disagree on ${f.id} (${v.map((x) => `${x.verifier.model}: ${x.label}`).join(", ")}); a person decides whether it is real` });
         continue;
       }
       const confirmed = labels.has("confirmed") && Math.min(...v.map((x) => x.probability)) >= policy.thresholds.report;
@@ -371,8 +387,16 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
     return mutate((state) => {
       const r = liveRound(state, { statuses: ["reported"] });
       const f = state.findings.find((x) => x.id === finding && x.round === r.round);
-      if (!f || !r.report.reported.includes(finding)) refuse(`${finding} is not a reported finding in round ${r.round}`, [reason("not-reported", `reported findings: ${r.report.reported.join(", ") || "none"}`)]);
+      // Reported findings, and disputed findings a person said are real.
+      const approved = state.escalations.some((x) => x.round === r.round && x.finding === finding && x.status === "approved");
+      const open = r.report.reported.includes(finding) || (r.report.escalated.includes(finding) && approved);
+      if (!f || !open) refuse(`${finding} is not a reported finding in round ${r.round}`, [reason("not-reported", `reported findings: ${r.report.reported.join(", ") || "none"}`)]);
       if (f.decisions["finding-triage"]?.at(-1)?.label === "needs-judgment") checkActor(actor, { human: true });
+      // Clearing a finding that would block a merge overrides an
+      // independent verification, so only a person can do it.
+      const disqualifying = r.policy.resolved.actions?.merge?.disqualifying ?? ["blocker", "should-fix"];
+      const sev = f.decisions["finding-severity"]?.at(-1)?.label ?? null;
+      if (CLEARING.includes(as) && (sev === null || disqualifying.includes(sev))) checkActor(actor, { human: true });
       if (f.disposition?.as === as && f.disposition?.note === note) return [];
       return [{ type: "finding.disposed", actor, data: { round: r.round, finding, as, note } }];
     }, { opId });
@@ -392,6 +416,9 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
         refuse("the classification was not recorded", [reason("decision-field", "rationale is required by policy evidence.decision")]);
       }
       const c = r.classification;
+      // A different category can lift an escalation, such as
+      // security-sensitive to deps-patch, so only a person can change it.
+      if (c && c.category !== category) checkActor(actor, { human: true });
       if (c && c.category === category && c.probability === probability && c.rationale === rationale && c.classifier.model === classifier.model) return [];
       const fam = classifier.family ?? familyOf(classifier.model);
       return [{ type: "change.classified", actor, data: { round: r.round, category, probability, rationale, classifier: { model: classifier.model, family: fam } } }];

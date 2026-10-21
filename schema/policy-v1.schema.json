@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/scalvert/agent-review/schema/policy-v1.schema.json",
+  "$id": "https://raw.githubusercontent.com/scalvert/agent-review/main/schema/policy-v1.schema.json",
   "title": "agent-review policy, version 1",
   "description": "Review policy for a repository, read from agent-review.json at the target branch's tip. The harness validates it strictly; this schema is for editors.",
   "type": "object",

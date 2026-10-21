@@ -25,6 +25,7 @@ const KEYS = [
   ["checks", (p) => p.observed.checks],
   ["approvals", (p) => JSON.stringify(p.observed.approvals)],
   ["matched rule", (p) => p.rule],
+  ["facts source", (p) => p.factsSource],
 ];
 
 export function prepareMerge({ eligibility, recheck, executor = dryRunExecutor, repo, number }) {
@@ -43,5 +44,8 @@ export function prepareMerge({ eligibility, recheck, executor = dryRunExecutor, 
       ...(fresh.outcome !== ELIGIBLE ? [why("no-longer-eligible", `a fresh check says ${fresh.outcome}`), ...fresh.reasons] : []),
     ]);
   }
-  return { executor: executor.name, decidedOn: eligibility.provenance, recheckedOn: fresh.provenance, result: executor.merge({ repo, number, sha: fresh.provenance.observed.head }) };
+  // Facts the harness did not fetch itself make this a simulation, and the
+  // result says so.
+  const simulated = fresh.provenance.factsSource !== "github";
+  return { executor: executor.name, simulated, decidedOn: eligibility.provenance, recheckedOn: fresh.provenance, result: executor.merge({ repo, number, sha: fresh.provenance.observed.head }) };
 }

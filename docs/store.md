@@ -18,7 +18,7 @@ The state root is chosen by the caller. `defaultStateRoot()` returns `$AGENT_REV
 ## Events
 
 ```json
-{"actor":"agent:tau","at":"2026-10-20T21:00:00.000Z","data":{},"op":{"digest":"sha256:...","id":"op-1","index":0,"size":1},"schema":"agent-review.event/v1","seq":1,"type":"review.started"}
+{"actor":"agent:claude","at":"2026-10-20T21:00:00.000Z","data":{},"op":{"digest":"sha256:...","id":"op-1","index":0,"size":1},"schema":"agent-review.event/v1","seq":1,"type":"review.started"}
 ```
 
 - `type` is dotted lowercase, such as `review.started`.

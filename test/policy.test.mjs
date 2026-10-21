@@ -171,6 +171,14 @@ test("the JSON Schema for editors names the same settings as the validator", () 
   assert.deepEqual(fromSchema(schema), strip(v1Keys()));
 });
 
+test("$schema is not part of the policy: changing the URL keeps the digest", () => {
+  const a = parse({ version: 1, $schema: "https://a.example/s.json" });
+  const b = parse({ version: 1, $schema: "https://b.example/s.json" });
+  assert.equal(a.effectiveDigest, b.effectiveDigest);
+  assert.equal(a.policy.$schema, undefined);
+  assert.equal(a.declared.$schema, "https://a.example/s.json", "the file as written is kept");
+});
+
 test("the example policy is valid, and $schema is allowed", () => {
   const p = parsePolicy(readFileSync(new URL("../examples/agent-review.json", import.meta.url)));
   assert.equal(p.policy.review.minDepth, "standard");

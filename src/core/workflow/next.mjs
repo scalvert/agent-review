@@ -2,7 +2,11 @@
 // next(); a person can use it the same way. inbox() lists only what is
 // waiting on a person, with one short ask each, so nobody wades through
 // every finding.
+import { CATEGORIES } from "../policy/defaults.mjs";
 import { activeRound } from "./review.mjs";
+
+// Merge eligibility needs the change classified; ask for it only then.
+const needsClassification = (r) => r.policy.resolved.actions?.merge?.enabled === true && !r.classification;
 
 const pendingSlots = (r) => r.plan.slots.filter((s) => r.runs[s.id]?.status !== "ok" && !r.gaps[s.id]);
 
@@ -56,20 +60,26 @@ export function next(state) {
         verifierMust: policy.independence.verifier === "family" ? { notFamily: f.author.family } : { notModel: f.author.model },
       }));
     if (verify.length) return { status: "verifying", ...base, waitingOn: "agent", action: { do: "verify", findings: verify }, human };
-    const classify = [];
+    const decide = [];
     const again = [];
     for (const f of findings) {
       const v = f.decisions["finding-verification"];
       const confirmed = v.every((x) => x.label === "confirmed") && Math.min(...v.map((x) => x.probability)) >= policy.thresholds.report;
-      if (!confirmed) continue;
-      const kinds = ["finding-severity", "finding-origin", "finding-triage"].filter((k) => !f.decisions[k]?.length);
-      if (kinds.length) classify.push({ finding: f.id, kinds });
+      // A disputed finding goes to a person, who needs its severity and
+      // origin to see what it would block.
+      const disputed = new Set(v.map((x) => x.label)).size > 1;
+      if (!confirmed && !disputed) continue;
+      const wanted = disputed ? ["finding-severity", "finding-origin"] : ["finding-severity", "finding-origin", "finding-triage"];
+      const kinds = wanted.filter((k) => !f.decisions[k]?.length);
+      if (kinds.length) decide.push({ finding: f.id, kinds, verifierMust: policy.independence.verifier === "family" ? { notFamily: f.author.family } : { notModel: f.author.model } });
+      if (disputed) continue;
       if (f.decisions["finding-severity"]?.at(-1)?.label === "blocker" && policy.independence.secondVerifierForBlockers && new Set(v.map((x) => x.verifier.model)).size < 2) {
         again.push({ finding: f.id, verifierMust: { notModels: [f.author.model, ...v.map((x) => x.verifier.model)], ...(policy.independence.verifier === "family" ? { notFamily: f.author.family } : {}) } });
       }
     }
-    if (classify.length) return { status: "verifying", ...base, waitingOn: "agent", action: { do: "classify", findings: classify }, human };
+    if (decide.length) return { status: "verifying", ...base, waitingOn: "agent", action: { do: "decide", findings: decide }, human };
     if (again.length) return { status: "verifying", ...base, waitingOn: "agent", action: { do: "verify-again", findings: again }, human };
+    if (needsClassification(r)) return { status: "verifying", ...base, waitingOn: "agent", action: { do: "classify", categories: CATEGORIES }, human };
     return { status: "verifying", ...base, waitingOn: "agent", action: { do: "report" }, human };
   }
 
@@ -79,6 +89,7 @@ export function next(state) {
     .filter((f) => f.round === r.round && r.report.reported.includes(f.id) && !f.disposition && f.decisions["finding-triage"]?.at(-1)?.label === "needs-judgment")
     .map((f) => ({ finding: f.id, code: "needs-judgment", ask: `${f.id}: ${f.title} (${f.file ?? "no file"}${f.line ? `:${f.line}` : ""}) needs your call` }));
   if (open.length) return { status: "reported", ...base, waitingOn: "human", action: { do: "resolve", escalations: open.map((x) => x.id) }, human: [...human, ...calls], report: r.report };
+  if (needsClassification(r)) return { status: "complete", ...base, waitingOn: "agent", action: { do: "classify", categories: CATEGORIES }, human: calls, report: r.report };
   return { status: "complete", ...base, waitingOn: calls.length ? "human" : null, action: calls.length ? { do: "dispose", findings: calls.map((c) => c.finding) } : null, human: calls, report: r.report };
 }
 

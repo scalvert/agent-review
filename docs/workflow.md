@@ -20,7 +20,8 @@ new head, merge base or policy on the next start -> round invalidated -> new rou
 | `decide` | `verifying`, the bound head, a verifier independent of the author | A verification, severity, triage or origin decision |
 | `report` | Every finding verified; reported findings with severity and origin; a second verifier on blockers when the policy asks | Reported, dropped and escalated findings, and coverage |
 | `resolveEscalation` | A person; an open escalation in the current round | Approve or reject, with a reason |
-| `dispose` | `reported`; a reported finding. A person, if the finding is triaged `needs-judgment` | `fixed`, `accepted`, `wrong`, `intended` or `not-worth-it`, with an optional note |
+| `dispose` | `reported`; a reported finding, or a disputed one a person approved. A person, if the finding is triaged `needs-judgment`, or if it clears (`wrong`, `intended`, `not-worth-it`) a finding at a disqualifying or missing severity | `fixed`, `accepted`, `wrong`, `intended` or `not-worth-it`, with an optional note |
+| `classify` | `reviewing`, `verifying` or `reported`; the bound head. A person, to change the category once it is set | The change's category, such as `deps-patch`, with a probability. Evidence for the merge policy, never permission. |
 
 `next(state)` returns the next required step, who it waits on, and what a person needs to look at. `inbox(reviews)` lists the same person items across reviews: escalations, failed slots, and reported findings triaged `needs-judgment` with no disposition yet. Each comes with a one-line ask. A review is `complete` once no escalation is open. Judgment calls on its findings still show as waiting on a person until someone disposes of them.
 
@@ -32,11 +33,14 @@ Calling `start` again with the same head, merge base and policy returns the exis
 
 ## Independence
 
-A verifier must be a different model from the finding's author. With `independence.verifier: "family"` (the default), it must also be from a different family. One model cannot verify the same finding twice with different answers. When verifiers disagree, the finding goes to a person, and the report does not pick a side.
+Every decision about a finding (verification, severity, triage and origin) must come from a different model than the finding's author. With `independence.verifier: "family"` (the default), it must also come from a different family. Otherwise an author could rate its own finding a nit, or triage away a judgment call. One model cannot verify the same finding twice with different answers.
+
+When verifiers disagree, the finding needs a severity and an origin, then goes to a person. The report does not pick a side. If the person approves, the finding is real: it blocks according to its severity, and a person can dispose of it. If the person rejects, the finding is not a problem, and it is dropped.
 
 ## Retries, resumption and parallel writers
 
-- Repeating an operation with the same input is a no-op. Recording the same successful run twice adds nothing.
+- Pass an operation ID (`opId`, or `--op-id` on the command line) to make a retry safe. A repeat with the same ID returns the earlier result, even if the review has moved on since, such as a retried `advance` after the review reached `verifying`.
+- Without an ID, repeating an operation whose result is already in place is a no-op, such as recording the same successful run or the same decision again. A step that changed the state, such as `advance`, is refused the second time with `wrong-state`. After an uncertain result, check `review next`.
 - A failed or skipped slot can be recorded again. A different result for a slot that already succeeded is refused.
 - Each operation appends only if nobody wrote since it read the state. Otherwise it reads again and checks again, so parallel agents on different slots all land.
 - The state is rebuilt from the event log, so a new process resumes exactly where the last one stopped.

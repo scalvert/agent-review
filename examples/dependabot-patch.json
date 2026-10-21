@@ -1,5 +1,5 @@
 {
-  "$schema": "https://github.com/scalvert/agent-review/schema/policy-v1.schema.json",
+  "$schema": "https://raw.githubusercontent.com/scalvert/agent-review/main/schema/policy-v1.schema.json",
   "version": 1,
   "review": {
     "requiredLenses": ["correctness", "security"],

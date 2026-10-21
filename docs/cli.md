@@ -6,6 +6,7 @@
 - A refused step exits 1. With JSON output, the reasons go to stderr as `{"error": {code, message, reasons}}`. A usage error exits 2.
 - Every command that changes state needs `--actor human:<name>` or `--actor agent:<runtime>`, or `AGENT_REVIEW_ACTOR`.
 - `--head` takes a ref or a SHA. The harness resolves a ref to its commit, so a run against an old commit is refused.
+- `--target` defaults to the remote's default branch, such as `origin/main`, else `main`. Eligibility reads the policy from the same ref and blocks if it is behind the host.
 - State lives under `--state`. Without it, the command line follows the v1 review tools' lookup, so existing ledgers and new reviews share one root:
   - `$AGENT_REVIEWS_STATE_DIR`, else `$SCALVERT_STATE_DIR`.
   - Else `~/.local/state/scalvert`, if it holds v1 reviews and the default root holds none.
@@ -21,9 +22,12 @@
 | `review advance` | Moves to verification once the panel is complete |
 | `review merge` | Marks duplicate findings |
 | `review decide` | Records a verification, severity, triage or origin decision |
+| `review classify` | Records the change's category, such as `deps-patch`. Merge eligibility needs it, and only a person can change it once it is set. |
 | `review report` | Writes the report once every finding has what it needs |
 | `review resolve` | Approves or rejects an escalation (people only) |
 | `review dispose` | Records what became of a reported finding. A `needs-judgment` finding is a person's call. |
+| `eligibility check` | Decides whether the change may merge: `eligible`, `blocked` or `escalate`, with every reason. It never merges. |
+| `merge dry-run` | Decides eligibility, rechecks it from fresh facts, and shows what a merge would do. It never merges. |
 | `review next` | Shows what is needed next, and who it waits on |
 | `review status` | Shows the full state |
 | `inbox` | Shows everything waiting on a person, across reviews |
@@ -99,7 +103,8 @@ while true; do
     advance)  agent-review review advance --repo "$REPO" --key "$KEY" --actor agent:me ;;
     verify)   ;;  # verify each finding with a model that meets .verifierMust, then: review decide ...
     verify-again) ;;  # a second verifier for each blocker, a model not in .verifierMust.notModels, then: review decide ...
-    classify) ;;  # severity, origin and triage for each finding, then: review decide ...
+    decide)   ;;  # severity, origin and triage for each finding, by a model that meets .verifierMust, then: review decide ...
+    classify) ;;  # the change's category, one of .categories, then: review classify ...
     report)   agent-review review report --repo "$REPO" --key "$KEY" --actor agent:me ;;
     *)        break ;;  # waiting on a person, or done; show them: agent-review inbox --text
   esac
@@ -110,4 +115,4 @@ The agent stops when `waitingOn` is `human`. When the person has acted, the same
 
 ## Taking over and resuming
 
-A person can run any command an agent can, and some only a person can. The state is the event log, not the agent's memory. So after a crash, a new session or a handoff, `review next` gives the same answer. Repeating a command that already succeeded changes nothing.
+A person can run any command an agent can, and some only a person can. The state is the event log, not the agent's memory. So after a crash, a new session or a handoff, `review next` gives the same answer. To make a retry safe after a lost response, pass the same `--op-id` both times; the retry returns the earlier result. A review with only a v1 ledger has that ledger imported on its first read. The v1 file is never changed.
