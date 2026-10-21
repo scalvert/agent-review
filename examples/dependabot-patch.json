@@ -1,0 +1,31 @@
+{
+  "$schema": "https://github.com/scalvert/agent-review/schema/policy-v1.schema.json",
+  "version": 1,
+  "review": {
+    "requiredLenses": ["correctness", "security"],
+    "minReviewers": 2
+  },
+  "independence": { "minFamilies": 2, "verifier": "family" },
+  "thresholds": { "classify": 0.9 },
+  "escalation": {
+    "paths": ["agent-review.json", ".github/**"],
+    "categories": ["policy", "security-sensitive", "deps-other", "feature"]
+  },
+  "actions": {
+    "merge": {
+      "enabled": true,
+      "disqualifying": ["blocker", "should-fix"],
+      "rules": [
+        {
+          "name": "dependabot-npm-patch",
+          "categories": ["deps-patch"],
+          "authors": ["dependabot[bot]"],
+          "requireVerifiedCommits": true,
+          "paths": ["package.json", "package-lock.json"],
+          "dependencies": "patch",
+          "minApprovals": 0
+        }
+      ]
+    }
+  }
+}

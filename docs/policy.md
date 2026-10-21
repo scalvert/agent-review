@@ -58,7 +58,9 @@ Every setting is optional, except `version`. The JSON Schema in `schema/policy-v
 | `escalation.paths` | `["agent-review.json"]` | A change to any of these globs goes to a person. |
 | `escalation.categories` | `["policy", "security-sensitive"]` | A change classified as any of these goes to a person. |
 | `actions.post` | `false` | Whether the harness may post comments or reviews. |
-| `actions.merge.enabled` | `false` | Must be `false`. Merge actions are not supported yet. |
+| `actions.merge.enabled` | `false` | Lets the harness decide merge eligibility. It needs at least one rule. Nothing merges: the harness ships only a dry-run executor. |
+| `actions.merge.disqualifying` | `["blocker", "should-fix"]` | Severities of reported findings that block a merge until they are disposed of as `wrong`, `intended` or `not-worth-it`. |
+| `actions.merge.rules` | `[]` | When a change may merge automatically. See [eligibility](eligibility.md). |
 
 In the file, a list replaces the default list. Model probabilities are not calibrated, so the thresholds are policy settings, not measurements of safety.
 
@@ -77,7 +79,9 @@ A run can tighten the policy, for example with command-line flags. It can never 
 | Lists: `deepPaths`, `requiredLenses`, `evidence.*`, `escalation.*` | Add entries |
 | Floors and counts: `minDepth`, `minReviewers`, `minFamilies`, `verifier`, `secondVerifierForBlockers`, `thresholds.classify` | Raise them |
 | `thresholds.report` | Lower it, so that more findings are reported |
-| `actions.*` | Turn them off |
+| `actions.post`, `actions.merge.enabled` | Turn them off |
+| `actions.merge.disqualifying` | Add severities |
+| `actions.merge.rules` | Nothing. Rules come only from the trusted policy. |
 | `defaultDepth` | Set it to any depth |
 
 If any override would weaken the policy, the whole set is refused, and the error names each setting.

@@ -22,3 +22,8 @@ export { WorkflowError, REFUSED, STALE, INVALID as WORKFLOW_INVALID, FORBIDDEN, 
 export { REDUCER_VERSION, initialState, reduce } from "./core/workflow/reducer.mjs";
 export { openReview, activeRound } from "./core/workflow/review.mjs";
 export { next, inbox } from "./core/workflow/next.mjs";
+
+export { versionChange } from "./core/decide/semver.mjs";
+export { evaluateEligibility, ELIGIBLE, BLOCKED, ESCALATE } from "./core/decide/eligibility.mjs";
+export { prepareMerge, dryRunExecutor } from "./core/decide/merge.mjs";
+export { localFacts } from "./core/decide/local-facts.mjs";
