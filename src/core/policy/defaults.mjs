@@ -18,6 +18,9 @@ export const DEFAULT_POLICY = Object.freeze({
     // Lenses every review runs, whatever the depth.
     requiredLenses: ["correctness"],
     minReviewers: 1,
+    // Review rounds per change, counting v1 rounds. Later rounds mostly find
+    // older problems, not new ones. Only a person can start one past this.
+    maxRounds: 3,
   },
   independence: {
     // Distinct model families across the panel.

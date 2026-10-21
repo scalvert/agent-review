@@ -16,7 +16,7 @@
 
 | Command | Does |
 |---|---|
-| `review start` | Starts a round bound to the head, merge base and trusted policy, or confirms the current one |
+| `review start` | Starts a round bound to the head, merge base and trusted policy, or confirms the current one. Past the policy's round cap, only a person can start one, with `--past-cap`. |
 | `review run` | Records one reviewer slot: `ok` with findings, or `failed` or `skipped` with a reason |
 | `review accept-gap` | Lets the panel go ahead without a slot (people only) |
 | `review advance` | Moves to verification once the panel is complete |
@@ -25,7 +25,8 @@
 | `review classify` | Records the change's category, such as `deps-patch`. Merge eligibility needs it, and only a person can change it once it is set. |
 | `review report` | Writes the report once every finding has what it needs |
 | `review resolve` | Approves or rejects an escalation (people only) |
-| `review dispose` | Records what became of a reported finding. A `needs-judgment` finding is a person's call. |
+| `review dispose` | Records what became of a reported finding, from this round or an earlier one. A `needs-judgment` finding is a person's call, and so is clearing a disqualifying one as `wrong`, `intended` or `not-worth-it`. `--note-file <file>`, or `-` for stdin, reads the note from a file, so text copied from a pull request never passes through a shell string. |
+| `review link` | Records the review thread on the host that carries a finding |
 | `eligibility check` | Decides whether the change may merge: `eligible`, `blocked` or `escalate`, with every reason. It never merges. |
 | `merge dry-run` | Decides eligibility, rechecks it from fresh facts, and shows what a merge would do. It never merges. |
 | `review next` | Shows what is needed next, and who it waits on |

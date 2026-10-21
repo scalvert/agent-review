@@ -15,17 +15,21 @@ export function next(state) {
   const open = state.escalations.filter((x) => x.status === "open" && x.round === state.round);
   const human = open.map((x) => ({ escalation: x.id, code: x.code, ask: x.message }));
 
+  // Rounds so far, with imported v1 rounds, so a caller can see the round
+  // cap coming. The cap itself comes from the trusted policy at start.
+  const roundsSoFar = state.round + state.legacy.reduce((n, l) => n + (l.rounds ?? 0), 0);
   if (!r) {
     return {
       status: "not-started",
       waitingOn: "agent",
       action: { do: "start" },
+      roundsSoFar,
       human,
       note: state.legacy.length ? "this review has v1 history only; it has not been reviewed under a version 1 policy" : null,
     };
   }
   if (r.status === "invalidated") {
-    return { status: "invalidated", round: r.round, waitingOn: "agent", action: { do: "start", why: r.invalidated.reason }, human: [] };
+    return { status: "invalidated", round: r.round, roundsSoFar, waitingOn: "agent", action: { do: "start", why: r.invalidated.reason }, human: [] };
   }
   const base = { round: r.round, head: r.binding.head, depth: r.depth.depth };
 

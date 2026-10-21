@@ -4,7 +4,7 @@ import { LEGACY_IMPORTED } from "../store/legacy-v1.mjs";
 import { WorkflowError, UNKNOWN_EVENT } from "./errors.mjs";
 
 // Bump when the state shape changes, so cached snapshots are rebuilt.
-export const REDUCER_VERSION = "review/3";
+export const REDUCER_VERSION = "review/4";
 
 export const initialState = () => ({
   legacy: [],
@@ -34,6 +34,8 @@ export function reduce(state, e) {
         binding: d.binding,
         policy: d.policy,
         depth: d.depth,
+        // Started past the policy's round cap, by a person.
+        pastCap: d.pastCap ?? false,
         plan: d.plan,
         runs: {},
         gaps: {},
@@ -56,7 +58,11 @@ export function reduce(state, e) {
       current(s, d.round).gaps[d.slot] = { reason: d.reason, actor: e.actor, at: e.at };
       break;
     case "finding.added":
-      s.findings.push({ ...d.finding, id: d.id, round: d.round, author: d.author, duplicateOf: null, decisions: {}, disposition: null });
+      // Findings recorded by 0.1 have no class, instances or axiom.
+      s.findings.push({ class: null, instances: [], axiom: null, ...d.finding, id: d.id, round: d.round, author: d.author, duplicateOf: null, decisions: {}, disposition: null, thread: null });
+      break;
+    case "finding.linked":
+      s.findings.find((x) => x.id === d.finding).thread = { id: d.thread, url: d.url, actor: e.actor, at: e.at };
       break;
     case "finding.merged":
       for (const id of d.ids) s.findings.find((f) => f.id === id).duplicateOf = d.into;

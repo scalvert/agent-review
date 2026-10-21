@@ -1,5 +1,5 @@
 // The public entry point.
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
 export { canonicalJson, digestOf, sha256 } from "./core/digest.mjs";
 export { StoreError, BUSY, CONFLICT, CORRUPT, INVALID, OP_ID_REUSED } from "./core/store/errors.mjs";
