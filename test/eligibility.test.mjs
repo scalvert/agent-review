@@ -241,6 +241,9 @@ test("the GitHub adapter reads facts without writing, and unknown protection sta
     "repos/acme/widgets/pulls/9/commits": [{ sha: head, commit: { verification: { verified: true } }, author: { login: BOT } }],
     "repos/acme/widgets/pulls/9/files": [{ filename: "package-lock.json" }, { filename: "package.json", previous_filename: "old/package.json" }],
     [`repos/acme/widgets/commits/${head}/check-runs`]: { check_runs: [{ name: "test", head_sha: head, status: "completed", conclusion: "success" }] },
+    [`repos/acme/widgets/commits/${head}/status`]: { statuses: [{ context: "ci/external", state: "success" }, { context: "deploy/preview", state: "pending" }] },
+    "repos/acme/widgets/collaborators/a/permission": { permission: "write" },
+    "repos/acme/widgets/collaborators/c/permission": { permission: "read" },
     "repos/acme/widgets/pulls/9/reviews": [
       { user: { login: "a" }, state: "APPROVED", commit_id: head },
       { user: { login: "b" }, state: "APPROVED", commit_id: "e".repeat(40) },
@@ -259,9 +262,43 @@ test("the GitHub adapter reads facts without writing, and unknown protection sta
   const f = githubFacts({ repo: "acme/widgets", number: 9, api, now: () => "t" });
   assert.equal(f.head, head);
   assert.deepEqual(f.changedPaths, ["package-lock.json", "package.json", "old/package.json"], "a rename's old path counts too");
-  assert.deepEqual(f.approvals, { count: 1, required: 0 }, "only each reviewer's latest review, on the current head");
+  assert.deepEqual(f.approvals, { count: 1, required: 0, ignored: [] }, "only each reviewer's latest review, on the current head");
+  assert.deepEqual(
+    f.checks.runs.filter((r) => r.source === "status").map((r) => [r.name, r.status, r.conclusion]),
+    [["ci/external", "completed", "success"], ["deploy/preview", "in_progress", null]],
+    "commit statuses count as checks",
+  );
   assert.deepEqual(f.checks.required, null);
   assert.deepEqual(f.branchProtection, { known: false, satisfied: null, mergeableState: "clean" });
   assert.equal(f.target.commit, "1".repeat(40));
   assert.ok(calls.every((c) => !/merge$/.test(c)), "no merge endpoint is called");
+
+  // An approval from a reviewer without write access does not count.
+  responses["repos/acme/widgets/pulls/9/reviews"] = [{ user: { login: "c" }, state: "APPROVED", commit_id: head }, { user: { login: "z" }, state: "APPROVED", commit_id: head }];
+  const g = githubFacts({
+    repo: "acme/widgets",
+    number: 9,
+    api: (path) => {
+      if (path.endsWith("/collaborators/z/permission")) throw Object.assign(new Error("Not Found"), { status: 404 });
+      return api(path);
+    },
+    now: () => "t",
+  });
+  assert.deepEqual(g.approvals, { count: 0, required: 0, ignored: [{ login: "c", permission: "read" }, { login: "z", permission: null }] });
+});
+
+test("a required check posted as a commit status satisfies eligibility", () => {
+  const { state, facts, head } = eligibleCase();
+  const viaStatus = with_(facts, { checks: { required: ["ci/external"], runs: [{ name: "ci/external", headSha: head, status: "completed", conclusion: "success", source: "status" }] } });
+  assert.equal(evaluateEligibility({ state, facts: viaStatus }).outcome, ELIGIBLE);
+});
+
+test("a round stored by an older build, without the newer merge settings, is blocked, not a crash", () => {
+  const f = { title: "t", file: "package.json", line: 1, precondition: "p", scenario: "s", evidence: "e", severity: "should-fix" };
+  const { state, facts } = eligibleCase({ finding: f });
+  const old = structuredClone(state);
+  old.rounds[1].policy.resolved.actions.merge = { enabled: false };
+  const e = evaluateEligibility({ state: old, facts });
+  assert.equal(e.outcome, BLOCKED);
+  assert.deepEqual(codes(e), ["merge-disabled", "disqualifying-finding"]);
 });

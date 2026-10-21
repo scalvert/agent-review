@@ -314,6 +314,27 @@ test("an event type this version does not know stops the read", () => {
   assert.throws(() => review.read(), refused(UNKNOWN_EVENT));
 });
 
+test("the default plan can complete: enough slots for the family minimum", () => {
+  const repo = gitRepo({ version: 1 });
+  const review = openReview(stateRoot(), REF);
+  const s = review.start({ git: repo.adapter, targetRef: "main", head: "feature", actor: AGENT }).state;
+  assert.deepEqual(s.rounds[1].plan.slots.map((x) => x.id), ["correctness", "correctness-2"], "two slots for two families");
+  review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head: repo.head, actor: AGENT });
+  review.recordRun({ slot: "correctness-2", status: "ok", model: GPT, head: repo.head, actor: AGENT });
+  assert.equal(next(review.advance({ actor: AGENT }).state).action.do, "report");
+});
+
+test("changing a decision and changing it back is recorded, not dropped as a repeat", () => {
+  const { review, head } = setup({ version: 1 });
+  happyPanel(review, head);
+  const sev = (label) => review.decide({ finding: "F1", kind: "finding-severity", label, probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  sev("blocker");
+  sev("nit");
+  assert.equal(sev("blocker").changed, true);
+  assert.equal(review.read().findings[0].decisions["finding-severity"].at(-1).label, "blocker");
+  assert.equal(sev("blocker").changed, false, "repeating what stands now is a no-op");
+});
+
 test("actors are required and must say whether they are a person or an agent", () => {
   const { review, head } = setup({ version: 1 });
   assert.throws(() => review.recordRun({ slot: "correctness", status: "ok", model: OPUS, head }), refused(WORKFLOW_INVALID));

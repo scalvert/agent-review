@@ -9,7 +9,6 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { gitAdapter } from "../adapters/git.mjs";
 import {
-  defaultStateRoot,
   inbox,
   listReviews,
   next,
@@ -19,6 +18,7 @@ import {
   POLICY_FILE,
 } from "../index.mjs";
 import { renderEligibility, renderError, renderInbox, renderNext } from "./render.mjs";
+import { cliStateRoot } from "./state-root.mjs";
 import { githubFacts } from "../adapters/github.mjs";
 import { npmDependencyChanges } from "../adapters/npm.mjs";
 import { activeRound, dryRunExecutor, evaluateEligibility, localFacts, prepareMerge } from "../index.mjs";
@@ -246,7 +246,7 @@ export function main(argv, { env = process.env, stdout = process.stdout, stderr 
     const cwd = o.cwd ?? process.cwd();
     let gitCache;
     const h = {
-      root: () => o.state ?? defaultStateRoot(env),
+      root: () => o.state ?? cliStateRoot(env),
       git: () => (gitCache ??= gitAdapter(cwd)),
       head: (ref) => (/^[0-9a-f]{40}$/.test(ref) ? ref : h.git().resolveCommit(ref)),
       actor: () => {

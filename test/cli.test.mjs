@@ -11,7 +11,11 @@ const BIN = new URL("../src/cli/main.mjs", import.meta.url).pathname;
 
 function cli(repo, state) {
   return (args, { actor = "agent:test", input } = {}) => {
-    const r = spawnSync("node", [BIN, ...args, "--state", state, "--cwd", repo.dir, ...(actor ? ["--actor", actor] : [])], { encoding: "utf8", input });
+    // A hermetic environment: the developer's own AGENT_REVIEW_ACTOR must not
+    // change what these tests see.
+    const env = { ...process.env };
+    delete env.AGENT_REVIEW_ACTOR;
+    const r = spawnSync("node", [BIN, ...args, "--state", state, "--cwd", repo.dir, ...(actor ? ["--actor", actor] : [])], { encoding: "utf8", input, env });
     let json = null;
     try {
       json = JSON.parse(r.status === 0 ? r.stdout : r.stderr);
@@ -156,7 +160,7 @@ test("--text gives a person a few lines, not JSON", () => {
   assert.equal(n.status, 0);
   const lines = n.stdout.trim().split("\n");
   assert.match(lines[0], /^reviewing \(round 1 at [0-9a-f]{12}, standard\)$/);
-  assert.equal(lines[1], "next: run correctness (retry: rate limited); needs 2 model families, has none [agent]");
+  assert.equal(lines[1], "next: run correctness (retry: rate limited), correctness-2; needs 2 model families, has none [agent]");
   assert.equal(lines[2], "for a person: slot correctness failed (rate limited); retry it, or accept the gap");
   const refused = run(["review", "advance", ...K, "--text"]);
   assert.equal(refused.status, 1);
