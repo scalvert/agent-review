@@ -6,7 +6,10 @@
 - A refused step exits 1. With JSON output, the reasons go to stderr as `{"error": {code, message, reasons}}`. A usage error exits 2.
 - Every command that changes state needs `--actor human:<name>` or `--actor agent:<runtime>`, or `AGENT_REVIEW_ACTOR`.
 - `--head` takes a ref or a SHA. The harness resolves a ref to its commit, so a run against an old commit is refused.
-- State lives under `--state`, else `$AGENT_REVIEWS_STATE_DIR`, else `$XDG_STATE_HOME/agent-reviews`, else `~/.local/state/agent-reviews`.
+- State lives under `--state`. Without it, the command line follows the v1 review tools' lookup, so existing ledgers and new reviews share one root:
+  - `$AGENT_REVIEWS_STATE_DIR`, else `$SCALVERT_STATE_DIR`.
+  - Else `~/.local/state/scalvert`, if it holds v1 reviews and the default root holds none.
+  - Else `$XDG_STATE_HOME/agent-reviews`, else `~/.local/state/agent-reviews`.
 
 ## Commands
 
@@ -95,6 +98,7 @@ while true; do
     run)      ;;  # run each slot in .action.slots on a model, then: review run --slot ... --head HEAD
     advance)  agent-review review advance --repo "$REPO" --key "$KEY" --actor agent:me ;;
     verify)   ;;  # verify each finding with a model that meets .verifierMust, then: review decide ...
+    verify-again) ;;  # a second verifier for each blocker, a model not in .verifierMust.notModels, then: review decide ...
     classify) ;;  # severity, origin and triage for each finding, then: review decide ...
     report)   agent-review review report --repo "$REPO" --key "$KEY" --actor agent:me ;;
     *)        break ;;  # waiting on a person, or done; show them: agent-review inbox --text

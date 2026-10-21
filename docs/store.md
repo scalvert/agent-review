@@ -36,9 +36,10 @@ These hold for writers on one machine.
 | A writer cannot get the lock within 10 seconds | It fails with `store/busy` and writes nothing. |
 | A writer crashed holding the lock | The next writer removes the lock if its PID is gone or it is older than 30 seconds. |
 | A retry with the same operation ID and events | It returns the first result and writes nothing. |
+| An append without an operation ID | It is always new. The store never guesses that identical events are a retry, because a value can change and change back. |
 | An operation ID reused for different events | It fails with `store/op-id-reused`. |
 | `expectSeq` given and the log moved | It fails with `store/conflict`, so the caller reads again and decides again. |
-| A crash mid-append left a partial last line | That append never returned, so the line is dropped. `read()` reports it, and the next append removes it. |
+| A crash mid-append left a partial last line, or only part of a batch | That append never returned, so the whole batch is dropped. `read()` reports it, the next append removes it, and a retry writes the whole batch again. |
 | A bad line anywhere else | It fails with `store/corrupt`. Nothing is changed or guessed. |
 | A missing, stale or unreadable snapshot | It is rebuilt from the log. |
 

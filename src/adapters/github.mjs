@@ -38,7 +38,15 @@ export function githubFacts({ repo, number, api = ghApi, now = () => new Date().
   }));
   const files = pages(api, `repos/${repo}/pulls/${number}/files`);
   const changedPaths = [...new Set(files.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean)))];
-  const runs = pages(api, `repos/${repo}/commits/${head}/check-runs`).map((r) => ({ name: r.name, headSha: r.head_sha, status: r.status, conclusion: r.conclusion }));
+  const runs = pages(api, `repos/${repo}/commits/${head}/check-runs`).map((r) => ({ name: r.name, headSha: r.head_sha, status: r.status, conclusion: r.conclusion, source: "check-run" }));
+  // Branch protection can require contexts posted through the Statuses API,
+  // which never appear as check runs. The combined status has the latest
+  // state per context.
+  const STATUS = { success: ["completed", "success"], failure: ["completed", "failure"], error: ["completed", "failure"], pending: ["in_progress", null] };
+  for (const s of api(`repos/${repo}/commits/${head}/status`).statuses ?? []) {
+    const [status, conclusion] = STATUS[s.state] ?? ["completed", "failure"];
+    runs.push({ name: s.context, headSha: head, status, conclusion, source: "status" });
+  }
 
   let required = null;
   let requiredApprovals = 0;
@@ -55,11 +63,24 @@ export function githubFacts({ repo, number, api = ghApi, now = () => new Date().
     if (e.status !== 404 && e.status !== 403) throw e;
   }
 
-  // An approval counts if it is the reviewer's latest review and is for the
-  // current head.
+  // An approval counts if it is the reviewer's latest review, is for the
+  // current head, and the reviewer can write to the repository. Anyone who
+  // can see a pull request can approve it; GitHub ignores those approvals,
+  // and so does this. If the permission cannot be read, it does not count.
   const latest = new Map();
   for (const r of pages(api, `repos/${repo}/pulls/${number}/reviews`)) if (r.user?.login) latest.set(r.user.login, r);
-  const approvals = [...latest.values()].filter((r) => r.state === "APPROVED" && r.commit_id === head).length;
+  const ignored = [];
+  let approvals = 0;
+  for (const r of [...latest.values()].filter((x) => x.state === "APPROVED" && x.commit_id === head)) {
+    let permission = null;
+    try {
+      permission = api(`repos/${repo}/collaborators/${encodeURIComponent(r.user.login)}/permission`).permission;
+    } catch (e) {
+      if (e.status !== 404 && e.status !== 403) throw e;
+    }
+    if (["admin", "maintain", "write"].includes(permission)) approvals += 1;
+    else ignored.push({ login: r.user.login, permission });
+  }
 
   const target = api(`repos/${repo}/branches/${encodeURIComponent(pr.base.ref)}`);
   return {
@@ -70,7 +91,7 @@ export function githubFacts({ repo, number, api = ghApi, now = () => new Date().
     commits,
     changedPaths,
     checks: { required, runs },
-    approvals: { count: approvals, required: requiredApprovals },
+    approvals: { count: approvals, required: requiredApprovals, ignored },
     // GitHub reports "clean" only when the pull request can merge with every
     // protection rule satisfied.
     branchProtection: { known: protectionKnown, satisfied: protectionKnown ? pr.mergeable_state === "clean" : null, mergeableState: pr.mergeable_state ?? null },

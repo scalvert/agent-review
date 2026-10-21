@@ -6,9 +6,10 @@
 // dispositions carry over as history, but a legacy round never counts as
 // evidence for a policy that came later.
 //
-// Importing the same bytes again is a no-op. If the v1 file changed since
-// the last import (v1 tools still write it during a migration), a new
-// import event records the new content and supersedes the old one.
+// Importing the same bytes as the latest import is a no-op. If the v1 file
+// changed since the last import (v1 tools still write it during a
+// migration), a new import event records the new content and supersedes the
+// old one, even if that content matches an older import.
 import { existsSync, readFileSync } from "node:fs";
 import { sha256 } from "../digest.mjs";
 import { checkRef } from "./paths.mjs";
@@ -34,6 +35,11 @@ export function importLegacyV1(log, ref, v1Path, { actor = "system:legacy-import
   if (ledger.repo !== repo || String(ledger.key) !== key) {
     throw new StoreError(INVALID, `${v1Path}: holds ${ledger.repo} ${ledger.key}, not ${repo} ${key}, so it was not imported`);
   }
+  // Compare with the latest import of this file, not every earlier one: if
+  // the file changed and then changed back, the old content is current again.
+  const { events, seq } = log.read();
+  const latest = events.filter((e) => e.type === LEGACY_IMPORTED && e.data.source?.path === v1Path).at(-1);
+  if (latest?.data.source.digest === digest) return { imported: false, duplicate: true, digest, seq: latest.seq, path: v1Path };
   const result = log.append(
     [
       {
@@ -48,7 +54,9 @@ export function importLegacyV1(log, ref, v1Path, { actor = "system:legacy-import
         },
       },
     ],
-    { opId: `legacy-v1-import:${digest}` },
+    // The ID names the content and the log position it follows, so a retry
+    // of this import is recognized and a later re-import is not.
+    { opId: `legacy-v1-import:${digest}:after-${seq}`, expectSeq: seq },
   );
   return { imported: !result.duplicate, duplicate: result.duplicate, digest, seq: result.seqs[0], path: v1Path };
 }

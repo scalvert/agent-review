@@ -54,11 +54,12 @@ test("append and read: sequence numbers run 1, 2, 3 and the snapshot matches the
   assert.deepEqual(r.state, { count: 3, values: [1, 2, 3] });
   const read = log.read();
   assert.equal(read.seq, 3);
-  assert.deepEqual(read.events.map((e) => [e.seq, e.op.id, e.op.index, e.op.size]), [
-    [1, `auto:${digestOf([{ type: "test.wrote", actor: "agent:test", data: { n: 1 } }])}`, 0, 1],
+  assert.match(read.events[0].op.id, /^auto:[0-9a-f]{24}$/);
+  assert.deepEqual(read.events.slice(1).map((e) => [e.seq, e.op.id, e.op.index, e.op.size]), [
     [2, "two", 0, 2],
     [3, "two", 1, 2],
   ]);
+  assert.equal(read.events[0].op.digest, digestOf([{ type: "test.wrote", actor: "agent:test", data: { n: 1 } }]));
   assert.deepEqual(read.state, { count: 3, values: [1, 2, 3] });
 });
 
@@ -79,11 +80,12 @@ test("a retry with the same operation ID writes nothing and returns the first re
   assert.deepEqual(again.seqs, first.seqs);
   assert.equal(again.duplicate, true);
   assert.equal(log.read().seq, 1);
-  // Without an explicit ID, identical events from the same actor are a retry.
+  // Without an explicit ID, every append is new: a value can change and
+  // change back (A, B, A), and the store must not drop the second A.
   log.append([ev(5)]);
-  assert.equal(log.append([ev(5)]).duplicate, true);
-  assert.equal(log.append([ev(5, "agent:other")]).duplicate, false, "another actor's identical event is new");
-  assert.equal(log.read().seq, 3);
+  log.append([ev(6)]);
+  assert.equal(log.append([ev(5)]).duplicate, false);
+  assert.deepEqual(log.read().state.values, [1, 5, 6, 5]);
 });
 
 test("reusing an operation ID for different events is an error", () => {
@@ -115,6 +117,23 @@ test("a partial last line from a crash is reported, then removed by the next app
   assert.equal(r.recovered[0].kind, "partial-last-line");
   assert.deepEqual(log.read().recovered, []);
   assert.deepEqual(log.read().state.values, [1, 2]);
+});
+
+test("a crash partway through a batch drops the whole batch, and the retry writes all of it", () => {
+  const log = openLog(root(), REF, counting);
+  log.append([ev(1)]);
+  log.append([ev(2), ev(3)], { opId: "batch" });
+  // Keep only the batch's first line, as if the write stopped there.
+  const lines = readFileSync(log.paths.log, "utf8").split("\n");
+  writeFileSync(log.paths.log, `${lines[0]}\n${lines[1]}\n${lines[2].slice(0, 20)}`);
+  const read = log.read();
+  assert.equal(read.seq, 1, "the partial batch does not count");
+  assert.deepEqual(read.recovered.map((r) => r.kind), ["partial-last-line", "partial-batch"]);
+  const retry = log.append([ev(2), ev(3)], { opId: "batch" });
+  assert.equal(retry.duplicate, false, "the retry is written, not mistaken for the crashed batch");
+  assert.deepEqual(retry.seqs, [2, 3]);
+  assert.deepEqual(log.read().state.values, [1, 2, 3]);
+  assert.deepEqual(log.read().recovered, []);
 });
 
 test("a bad line in the middle is corruption: reading and writing fail, and nothing changes", () => {
@@ -266,6 +285,11 @@ test("v1 import is idempotent, and a changed v1 file is imported again", () => {
   v1Ledger(r, REF, { findings: [] });
   assert.equal(importLegacyV1(log, REF, path).imported, true);
   assert.equal(log.read().seq, 2);
+  // Changed back to the first content: that is current again, so it is
+  // imported again rather than taken for the first import.
+  v1Ledger(r, REF);
+  assert.equal(importLegacyV1(log, REF, path).imported, true);
+  assert.equal(log.read().events.at(-1).data.findings, 1);
 });
 
 test("v1 import refuses a file that is not a v1 ledger for this review", () => {

@@ -95,7 +95,9 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
 
     const names = [...new Set([...policy.review.requiredLenses, ...lenses])];
     const slots = names.map((lens) => ({ id: lens, lens }));
-    for (let i = 2; slots.length < policy.review.minReviewers; i++) slots.push({ id: `${names[0]}-${i}`, lens: names[0] });
+    // Enough slots for both minimums: each family needs at least one run.
+    const need = Math.max(policy.review.minReviewers, policy.independence.minFamilies);
+    for (let i = 2; slots.length < need; i++) slots.push({ id: `${names[0]}-${i}`, lens: names[0] });
 
     const binding = { target: tp.target, head: tp.head, mergeBase, policyDigest: resolved.effectiveDigest, policySourceDigest: tp.trusted.source.digest };
 
@@ -244,7 +246,12 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       const fam = verifier.family ?? familyOf(verifier.model);
       const decision = { round: r.round, finding, kind, label, probability, rationale, verifier: { model: verifier.model, family: fam } };
       const earlier = f.decisions[kind] ?? [];
-      if (earlier.some((x) => x.verifier.model === verifier.model && x.label === label && x.probability === probability && x.rationale === rationale)) return [];
+      const same = (x) => x && x.verifier.model === verifier.model && x.label === label && x.probability === probability && x.rationale === rationale;
+      // A repeat is a no-op only if it matches what stands now. For
+      // verification that is this verifier's own answer; for the other kinds
+      // it is the latest decision, so changing a label and changing it back
+      // is recorded, not dropped.
+      if (kind === "finding-verification" ? earlier.some(same) : same(earlier.at(-1))) return [];
       if (kind === "finding-verification") {
         const independence = policy.independence.verifier;
         if (verifier.model === f.author.model) {

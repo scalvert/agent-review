@@ -95,7 +95,9 @@ export function evaluateEligibility({ state, facts }) {
   if (facts.policyDigest !== r.binding.policyDigest) reasons.push(block("policy-changed", "the trusted policy changed since the review started"));
 
   const policy = r.policy.resolved;
-  const merge = policy.actions.merge;
+  // A round stores the policy as resolved when it started. Rounds from older
+  // builds lack newer merge settings; fill them with the safe defaults.
+  const merge = { enabled: false, disqualifying: ["blocker", "should-fix"], rules: [], ...(policy.actions?.merge ?? {}) };
   if (!merge.enabled) reasons.push(block("merge-disabled", "the policy does not enable merge eligibility (actions.merge.enabled)"));
 
   const open = state.escalations.filter((x) => x.round === r.round && x.status === "open");

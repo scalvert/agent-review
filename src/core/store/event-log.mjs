@@ -6,19 +6,23 @@
 //   events or none, and returns their sequence numbers. It never silently
 //   drops another writer's events.
 // - Sequence numbers start at 1 and have no gaps.
-// - Each append has an operation ID. Repeating an append with the same ID
-//   and the same events returns the first result and writes nothing, so a
-//   retry after a timeout or crash is safe. Reusing an ID for different
-//   events is an error.
+// - An append may carry an operation ID. Repeating an append with the same
+//   ID and the same events returns the first result and writes nothing, so
+//   a retry after a timeout or crash is safe. Reusing an ID for different
+//   events is an error. Without an ID, every append is new: identical events
+//   can legitimately repeat (a decision changed and then changed back), so
+//   the store never guesses that they are a retry.
 // - expectSeq makes an append conditional: it fails with store/conflict if
 //   anyone appended since the caller read the log.
-// - A crash in the middle of an append can leave a partial last line. That
-//   append never returned, so the partial line is dropped: read() reports it
-//   and the next append removes it. A bad line anywhere else is corruption,
-//   and reading fails rather than guessing.
+// - A crash in the middle of an append can leave a partial last line, or
+//   only some of a batch's lines. That append never returned, so the whole
+//   batch is dropped: read() reports it and the next append removes it, and
+//   a retry writes the whole batch again. A bad line anywhere else is
+//   corruption, and reading fails rather than guessing.
 // - The snapshot is a cache. If it is missing, stale or from another reducer
 //   version, it is rebuilt from the log.
 import { closeSync, existsSync, fsyncSync, ftruncateSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { canonicalJson, digestOf } from "../digest.mjs";
 import { writeFileAtomic } from "./atomic.mjs";
 import { withLock } from "./lock.mjs";
@@ -43,11 +47,18 @@ function checkEvent(e, i) {
 // Read every complete line. A final line with no newline is a partial write
 // from a crash; anything else that does not parse is corruption.
 function parseLog(path) {
-  if (!existsSync(path)) return { events: [], tornBytes: 0, size: 0 };
-  const text = readFileSync(path, "utf8");
-  const end = text.lastIndexOf("\n") + 1;
+  if (!existsSync(path)) return { events: [], tornBytes: 0, size: 0, dropped: [] };
+  const bytes = readFileSync(path);
+  const end = bytes.lastIndexOf(0x0a) + 1;
   const events = [];
-  const lines = text.slice(0, end).split("\n").slice(0, -1);
+  const offsets = [];
+  const lines = [];
+  for (let at = 0; at < end; ) {
+    const nl = bytes.indexOf(0x0a, at);
+    offsets.push(at);
+    lines.push(bytes.subarray(at, nl).toString("utf8"));
+    at = nl + 1;
+  }
   lines.forEach((line, i) => {
     let e;
     try {
@@ -59,7 +70,20 @@ function parseLog(path) {
     if (e.seq !== i + 1) throw new StoreError(CORRUPT, `${path}: line ${i + 1} has seq ${e.seq}; sequence numbers must run 1, 2, 3 with no gaps`, { path, line: i + 1 });
     events.push(e);
   });
-  return { events, tornBytes: Buffer.byteLength(text.slice(end)), size: Buffer.byteLength(text.slice(0, end)) };
+  const dropped = [];
+  const tornBytes = bytes.length - end;
+  if (tornBytes) dropped.push({ kind: "partial-last-line", bytes: tornBytes });
+  // A batch is written in one write. If its last events are missing, the
+  // append crashed before it returned, so none of the batch counts.
+  let size = end;
+  const last = events.at(-1);
+  if (last && last.op.index + 1 < last.op.size) {
+    const first = events.findIndex((e) => e.op.id === last.op.id && e.op.digest === last.op.digest);
+    dropped.push({ kind: "partial-batch", opId: last.op.id, events: events.length - first, of: last.op.size });
+    size = offsets[first];
+    events.splice(first);
+  }
+  return { events, tornBytes: bytes.length - size, size, dropped };
 }
 
 function reduceAll(events, reducer, initial) {
@@ -85,30 +109,25 @@ export function openLog(root, ref, { reducer = null, initial = {}, reducerVersio
   }
 
   function read() {
-    const { events, tornBytes } = parseLog(paths.log);
-    return {
-      events,
-      seq: events.length,
-      state: stateFor(events),
-      recovered: tornBytes ? [{ kind: "partial-last-line", bytes: tornBytes }] : [],
-    };
+    const { events, dropped } = parseLog(paths.log);
+    return { events, seq: events.length, state: stateFor(events), recovered: dropped };
   }
 
   function append(batch, { opId, expectSeq } = {}) {
     if (!Array.isArray(batch) || batch.length === 0) throw new StoreError(INVALID, "append needs at least one event");
     const clean = batch.map(checkEvent);
     const digest = digestOf(clean);
-    // Without an explicit ID, the same events from the same actor count as a
-    // retry of the same operation.
-    const id = opId ?? `auto:${digest}`;
-    if (typeof id !== "string" || id.length === 0 || id.length > 200) throw new StoreError(INVALID, "opId must be a nonempty string of at most 200 characters");
+    if (opId !== undefined && (typeof opId !== "string" || opId.length === 0 || opId.length > 200)) throw new StoreError(INVALID, "opId must be a nonempty string of at most 200 characters");
+    // Without an explicit ID, the append gets a unique one and is never
+    // treated as a retry.
+    const id = opId ?? `auto:${randomBytes(12).toString("hex")}`;
 
     mkdirSync(paths.dir, { recursive: true });
     return withLock(
       paths.lock,
       () => {
-        const { events, tornBytes, size } = parseLog(paths.log);
-        const recovered = [];
+        const { events, tornBytes, size, dropped } = parseLog(paths.log);
+        const recovered = dropped;
         if (tornBytes) {
           const fd = openSync(paths.log, "r+");
           try {
@@ -117,7 +136,6 @@ export function openLog(root, ref, { reducer = null, initial = {}, reducerVersio
           } finally {
             closeSync(fd);
           }
-          recovered.push({ kind: "partial-last-line", bytes: tornBytes });
         }
 
         const earlier = events.filter((e) => e.op.id === id);
