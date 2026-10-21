@@ -101,12 +101,16 @@ export function reduce(state, e) {
       // way the report gives them now, from the state at the report.
       const numbers = d.report.numbers ?? numberReport(s, [...d.report.reported, ...d.report.escalated]);
       for (const x of numbers) s.findings.find((f) => f.id === x.finding).number = x.n;
+      // 0.2 raised its escalations just before this event, with messages
+      // that name the finding by its key. Name it by its number instead.
+      for (const x of s.escalations) nameByNumber(s, x);
       current(s, d.round).status = "reported";
       current(s, d.round).report = { ...d.report, numbers, at: e.at };
       break;
     }
     case "escalation.raised":
       s.escalations.push({ id: d.id, round: d.round, code: d.code, message: d.message, path: d.path ?? null, finding: d.finding ?? null, status: "open", raisedAt: e.at, resolution: null });
+      nameByNumber(s, s.escalations.at(-1));
       break;
     case "escalation.resolved": {
       const x = s.escalations.find((y) => y.id === d.id);
@@ -120,4 +124,15 @@ export function reduce(state, e) {
       throw new WorkflowError(UNKNOWN_EVENT, `event ${e.seq} has type ${JSON.stringify(e.type)}, which this version of the harness does not know; upgrade the harness to read this review`);
   }
   return s;
+}
+
+// A message 0.2 wrote names its finding by key: "verifiers disagree on F1".
+// Every output passes the message through, so it would show the key. Once
+// the finding has a number, the message names that instead. The log keeps
+// what was written. A message from 0.3 has no key, so this changes nothing.
+function nameByNumber(s, x) {
+  if (!x.finding) return;
+  const n = s.findings.find((f) => f.id === x.finding)?.number;
+  if (n == null) return;
+  x.message = x.message.replace(new RegExp(`\\b${x.finding}\\b`, "g"), `finding ${n}`);
 }

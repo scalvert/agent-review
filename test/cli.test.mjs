@@ -95,6 +95,39 @@ test("the full flow on the command line, with a refused step along the way", () 
   assert.equal(status.json.findings[0].disposition.note, note);
 });
 
+test("merge and link take numbers on the command line, and refuse an internal key", () => {
+  const repo = gitRepo({ version: 1 });
+  const run = cli(repo, stateRoot());
+  const ok = (args, opts) => {
+    const r = run(args, opts);
+    assert.equal(r.status, 0, `${args.join(" ")}\n${r.stderr}`);
+    return r;
+  };
+  ok(["review", "start", ...K, "--target", "main", "--head", "feature", "--lenses", "security"]);
+  ok(["review", "run", ...K, "--slot", "correctness", "--status", "ok", "--model", "anthropic/opus", "--findings", "-", "--head", "feature"], { input: JSON.stringify([finding(1), finding(2), finding(3)]) });
+  ok(["review", "run", ...K, "--slot", "security", "--status", "ok", "--model", "openai/gpt-5.5", "--findings", "-", "--head", "feature"], { input: "[]" });
+  ok(["review", "advance", ...K]);
+
+  for (const bad of [["--into", "F1", "--duplicates", "2"], ["--into", "1", "--duplicates", "F2"], ["--into", "1", "--ids", "2"]]) {
+    assert.equal(run(["review", "merge", ...K, ...bad]).status, 2, bad.join(" "));
+  }
+  ok(["review", "merge", ...K, "--into", "1", "--duplicates", "2,3"]);
+  const merged = run(["review", "status", ...K], { actor: null }).json;
+  assert.deepEqual(merged.findings.map((f) => [f.candidate, f.duplicateOf]), [[1, null], [2, 1], [3, 1]]);
+
+  for (const [kind, label] of [["finding-verification", "confirmed"], ["finding-severity", "should-fix"], ["finding-origin", "introduced"], ["finding-triage", "agent-fixable"]]) {
+    ok(["review", "decide", ...K, "--candidate", "1", "--kind", kind, "--label", label, "--probability", "0.9", "--rationale", "r", "--verifier-model", "openai/gpt-5.5", "--head", "feature"]);
+  }
+  ok(["review", "report", ...K]);
+
+  const url = "https://github.com/acme/widgets/pull/7#discussion_r1";
+  assert.equal(run(["review", "link", ...K, "--finding", "F1", "--thread", "PRRT_1", "--url", url]).status, 2);
+  ok(["review", "link", ...K, "--finding", "1", "--thread", "PRRT_1", "--url", url]);
+  const linked = run(["review", "status", ...K], { actor: null });
+  assert.deepEqual([linked.json.findings[0].number, linked.json.findings[0].thread.id, linked.json.findings[0].thread.url], [1, "PRRT_1", url]);
+  assert.equal(linked.stdout.match(/"F[0-9]+"/), null);
+});
+
 test("a person takes over: an agent cannot accept a gap or resolve an escalation, a person can, and the agent resumes", () => {
   const repo = gitRepo({ version: 1, escalation: { paths: ["agent-review.json", "src/**"] } });
   const run = cli(repo, stateRoot());

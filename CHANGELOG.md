@@ -11,7 +11,7 @@ Findings are named by number. Internal keys such as `F2` never reach a person, s
 - A dispute's escalation names the finding by number and title.
 - `dispose` on a disputed finding says the dispute is settled first, and names the escalation.
 - New exports: `SECTIONS`, `placement`, `numberReport`, `publicReport` and `publicState`.
-- A review written by 0.2 is numbered when it is read, the same way a report numbers findings now. Cached snapshots are rebuilt.
+- A review written by 0.2 is numbered when it is read, the same way a report numbers findings now, and its dispute messages name the finding by number instead of its key. The log keeps what 0.2 wrote. Cached snapshots are rebuilt.
 
 ## 0.2.0
 

@@ -21,6 +21,7 @@ import {
   reduce,
   initialState,
 } from "../src/index.mjs";
+import { renderNext } from "../src/cli/render.mjs";
 import { finding, gitRepo, stateRoot } from "./helpers.mjs";
 
 const REF = { repo: "acme/widgets", key: "42" };
@@ -227,6 +228,10 @@ test("verifiers that disagree go to a person; only a person resolves it", () => 
   assert.equal(n.status, "reported");
   assert.equal(n.waitingOn, "human");
   assert.equal(s.findings[0].number, 1, "a disputed finding is numbered with the report");
+  assert.deepEqual(n.report.findings, []);
+  assert.deepEqual(n.report.disputed, [1], "the report lists the disputed finding by number");
+  assert.deepEqual(n.report.dropped, [2], "and the refuted one by candidate number");
+  assert.match(renderNext(n), /report: 0 reported, 1 dropped, 1 disputed/);
   const [item] = inbox([{ ref: REF, state: s }]);
   assert.equal(item.code, "verifiers-disagree");
   assert.equal(item.finding, 1);
@@ -500,6 +505,35 @@ test("a log from before 0.3, without candidate or finding numbers, is numbered t
   const rebuilt = old.reduce((state, e) => reduce(state, e), initialState());
   assert.deepEqual(rebuilt.findings.map((f) => [f.candidate, f.number]), s.findings.map((f) => [f.candidate, f.number]));
   assert.deepEqual(rebuilt.rounds[1].report.numbers, s.rounds[1].report.numbers);
+});
+
+test("a dispute raised by 0.2, whose message names a key, is shown with the finding's number", () => {
+  const root = stateRoot();
+  const repo = gitRepo({ version: 1, independence: { verifier: "model" } });
+  const review = openReview(root, REF);
+  review.start({ git: repo.adapter, targetRef: "main", head: "feature", lenses: ["security"], actor: AGENT });
+  happyPanel(review, repo.head);
+  const v = (candidate, model, label) => review.decide({ candidate, kind: "finding-verification", label, probability: label === "confirmed" ? 0.9 : 0.2, rationale: "r", verifier: { model }, head: repo.head, actor: AGENT });
+  v(1, GPT, "refuted");
+  v(2, OPUS, "confirmed");
+  v(2, SONNET, "refuted");
+  for (const kind of ["finding-severity", "finding-origin"]) review.decide({ candidate: 2, kind, label: kind === "finding-severity" ? "should-fix" : "introduced", probability: 0.8, rationale: "r", verifier: { model: OPUS }, head: repo.head, actor: AGENT });
+  review.report({ actor: AGENT });
+  // The log as 0.2 wrote it: no numbers, and the message 0.2 wrote.
+  const old = openLog(root, REF).read().events.map((e) => {
+    const data = structuredClone(e.data);
+    if (e.type === "finding.added") delete data.candidate;
+    if (e.type === "review.reported") delete data.report.numbers;
+    if (e.type === "escalation.raised") data.message = `verifiers disagree on ${data.finding} (${OPUS}: confirmed, ${SONNET}: refuted); a person decides whether it is real`;
+    return { ...e, data };
+  });
+  assert.ok(old.some((e) => e.type === "escalation.raised" && /\bF2\b/.test(e.data.message)), "the 0.2 message names the key");
+  const s = old.reduce((state, e) => reduce(state, e), initialState());
+  const key = /\bF[0-9]+\b/;
+  const [item] = inbox([{ ref: REF, state: s }]);
+  assert.match(item.ask, /^verifiers disagree on finding 1 \(/, "the disputed finding is the round's first number");
+  for (const out of [next(s), publicState(s), inbox([{ ref: REF, state: s }])]) assert.doesNotMatch(JSON.stringify(out), key);
+  assert.doesNotMatch(renderNext(next(s)), key);
 });
 
 test("no output names a finding by its internal key", () => {
