@@ -3,7 +3,8 @@
 import { LEGACY_IMPORTED } from "../store/legacy-v1.mjs";
 import { WorkflowError, UNKNOWN_EVENT } from "./errors.mjs";
 
-export const REDUCER_VERSION = "review/1";
+// Bump when the state shape changes, so cached snapshots are rebuilt.
+export const REDUCER_VERSION = "review/2";
 
 export const initialState = () => ({
   legacy: [],
@@ -51,7 +52,7 @@ export function reduce(state, e) {
       current(s, d.round).gaps[d.slot] = { reason: d.reason, actor: e.actor, at: e.at };
       break;
     case "finding.added":
-      s.findings.push({ ...d.finding, id: d.id, round: d.round, author: d.author, duplicateOf: null, decisions: {} });
+      s.findings.push({ ...d.finding, id: d.id, round: d.round, author: d.author, duplicateOf: null, decisions: {}, disposition: null });
       break;
     case "finding.merged":
       for (const id of d.ids) s.findings.find((f) => f.id === id).duplicateOf = d.into;
@@ -59,6 +60,11 @@ export function reduce(state, e) {
     case "decision.recorded": {
       const f = s.findings.find((x) => x.id === d.finding);
       (f.decisions[d.kind] ??= []).push({ label: d.label, probability: d.probability, rationale: d.rationale, verifier: d.verifier, actor: e.actor, at: e.at, seq: e.seq });
+      break;
+    }
+    case "finding.disposed": {
+      const f = s.findings.find((x) => x.id === d.finding);
+      f.disposition = { as: d.as, note: d.note, actor: e.actor, at: e.at };
       break;
     }
     case "review.advanced":

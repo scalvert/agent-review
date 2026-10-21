@@ -5,7 +5,7 @@ export { canonicalJson, digestOf, sha256 } from "./core/digest.mjs";
 export { StoreError, BUSY, CONFLICT, CORRUPT, INVALID, OP_ID_REUSED } from "./core/store/errors.mjs";
 export { withLock, acquire, release, DEFAULT_TIMEOUT_MS, DEFAULT_STALE_MS } from "./core/store/lock.mjs";
 export { writeFileAtomic } from "./core/store/atomic.mjs";
-export { defaultStateRoot, keyFile, reviewPaths, legacyV1Path } from "./core/store/paths.mjs";
+export { defaultStateRoot, keyFile, decodeKeyFile, listReviews, reviewPaths, legacyV1Path } from "./core/store/paths.mjs";
 export { openLog, EVENT_SCHEMA, SNAPSHOT_SCHEMA } from "./core/store/event-log.mjs";
 export { importLegacyV1, LEGACY_V1_SCHEMA, LEGACY_IMPORTED } from "./core/store/legacy-v1.mjs";
 
@@ -17,7 +17,7 @@ export { applyOverrides } from "./core/policy/overrides.mjs";
 export { resolveDepth } from "./core/policy/depth.mjs";
 export { trustedPolicy, POLICY_CHANGE } from "./core/policy/trust.mjs";
 
-export { DECISION_KINDS, RUN_STATUSES, RUNNER_KINDS, defaultFamily } from "./core/workflow/kinds.mjs";
+export { DECISION_KINDS, DISPOSITIONS, RUN_STATUSES, RUNNER_KINDS, defaultFamily } from "./core/workflow/kinds.mjs";
 export { WorkflowError, REFUSED, STALE, INVALID as WORKFLOW_INVALID, FORBIDDEN, UNKNOWN_EVENT } from "./core/workflow/errors.mjs";
 export { REDUCER_VERSION, initialState, reduce } from "./core/workflow/reducer.mjs";
 export { openReview, activeRound } from "./core/workflow/review.mjs";

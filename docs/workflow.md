@@ -20,8 +20,9 @@ new head, merge base or policy on the next start -> round invalidated -> new rou
 | `decide` | `verifying`, the bound head, a verifier independent of the author | A verification, severity, triage or origin decision |
 | `report` | Every finding verified; reported findings with severity and origin; a second verifier on blockers when the policy asks | Reported, dropped and escalated findings, and coverage |
 | `resolveEscalation` | A person; an open escalation in the current round | Approve or reject, with a reason |
+| `dispose` | `reported`; a reported finding. A person, if the finding is triaged `needs-judgment` | `fixed`, `accepted`, `wrong`, `intended` or `not-worth-it`, with an optional note |
 
-`next(state)` returns the next required step, who it waits on, and what a person needs to look at. `inbox(reviews)` lists only what waits on a person: escalations, failed slots, and reported findings triaged `needs-judgment`. Each comes with a one-line ask.
+`next(state)` returns the next required step, who it waits on, and what a person needs to look at. `inbox(reviews)` lists the same person items across reviews: escalations, failed slots, and reported findings triaged `needs-judgment` with no disposition yet. Each comes with a one-line ask. A review is `complete` once no escalation is open. Judgment calls on its findings still show as waiting on a person until someone disposes of them.
 
 ## Binding and invalidation
 
