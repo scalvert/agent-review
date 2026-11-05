@@ -74,15 +74,25 @@ export function bytes(n) {
   return `${i ? n.toFixed(1) : n} ${units[i]}`;
 }
 
+const dirs = (n) => `${n} work ${n === 1 ? "directory" : "directories"}`;
+const line = (verb, i) => `  ${verb.padEnd(9)} ${i.repo} ${i.key}  ${bytes(i.bytes)}  ${(i.reasons ?? []).map((r) => r.message).join("; ")}`;
+
 export function renderGc(g) {
   if (!g.items.length) return "No review has a work directory.";
-  const gone = g.items.filter((i) => i.action === (g.applied ? "removed" : "purge"));
-  const total = g.applied ? g.bytes.removed : g.bytes.purge;
+  const gone = g.items.filter((i) => (g.applied ? i.removed : i.removable));
   const head = g.applied
-    ? `removed ${gone.length} work ${gone.length === 1 ? "directory" : "directories"}, ${bytes(total)}`
-    : `would remove ${gone.length} work ${gone.length === 1 ? "directory" : "directories"}, ${bytes(total)} (dry run; --apply removes them)`;
-  const verb = { purge: "remove", removed: "removed", keep: "keep" };
-  return [head, ...g.items.map((i) => `  ${verb[i.action].padEnd(7)} ${i.repo} ${i.key}  ${bytes(i.bytes)}  ${(i.reasons ?? []).map((r) => r.message).join("; ")}`)].join("\n");
+    ? `removed ${dirs(gone.length)}, ${bytes(g.bytes.removed)}`
+    : `would remove ${dirs(gone.length)}, ${bytes(g.bytes.removable)} (dry run; --apply removes them)`;
+  const verb = (i) => (g.applied ? (i.removed ? "removed" : i.status) : i.removable ? "remove" : i.status);
+  return [head, ...g.items.map((i) => line(verb(i), i))].join("\n");
+}
+
+// One line per work directory: its status, size and why.
+export function renderWorkdirs(g) {
+  if (!g.items.length) return "No review has a work directory.";
+  const removable = g.items.filter((i) => i.removable);
+  const head = `${dirs(g.items.length)}; gc may remove ${removable.length}, ${bytes(g.bytes.removable)}`;
+  return [head, ...g.items.map((i) => line(i.status, i))].join("\n");
 }
 
 export function renderError(e) {

@@ -33,8 +33,9 @@
 | `review next` | Shows what is needed next, and who it waits on |
 | `review status` | Shows the full state, with candidates and findings by number |
 | `inbox` | Shows everything waiting on a person, across reviews |
-| `review workdir` | Prints the review's work directory for scratch files, such as a checkout or eval output, and creates it if it is missing. Put review scratch here, not in the repository under review, so `gc` can remove it. |
-| `gc` | Lists the work directories of merged, closed or idle reviews, and what each holds. `--apply` removes them, and needs an actor. `--idle-days <n>` (default 30), `--repo` to narrow it, `--offline` to skip GitHub. A directory with uncommitted, unpushed or stashed git work is always kept. Review history is never removed. See [the store](store.md#work-directories-and-gc). |
+| `review workdir` | Prints the review's work directory for scratch files, such as a checkout or eval output, creates it if it is missing, and gives the caller a lease so `gc` leaves it alone. `--lease-hours <n>` (default 4), `--lease <id>` to renew, `--pid <n>` to end the lease when that process exits, `--release --lease <id>` when done. Put review scratch here, not in the repository under review. |
+| `workdirs` | Lists every work directory with its status (`in-use`, `protected`, `in-review`, `paused`, `done` or `idle`), size, and whether `gc` may remove it, with the reason. `--idle-days`, `--repo` and `--offline` as for `gc`. |
+| `gc` | Removes the work directories that are `done` or `idle`; a dry run unless `--apply`, which needs an actor. `--idle-days <n>` (default 30), `--repo` to narrow it, `--offline` to skip GitHub. A leased directory, or one with uncommitted, unpushed or stashed git work, is never removed, and neither is review history. See [the store](store.md#work-directories-and-gc). |
 | `policy check` | Validates a policy file, or shows the trusted policy for a target |
 
 ## A person's walkthrough
@@ -116,7 +117,34 @@ while true; do
 done
 ```
 
-Scratch files go in `agent-review review workdir --repo "$REPO" --key "$KEY" --json | jq -r .path`, not in the repository under review, so `gc` can remove them once the pull request merges.
+Scratch files go in the review's work directory, not in the repository under review. Take a lease before using it, renew it while you work, and release it when you stop:
+
+```sh
+wd=$(agent-review review workdir --repo "$REPO" --key "$KEY" --actor agent:me --json)
+dir=$(echo "$wd" | jq -r .path) lease=$(echo "$wd" | jq -r .lease.id)
+# ... work in "$dir"; for a long run, renew within the lease:
+agent-review review workdir --repo "$REPO" --key "$KEY" --actor agent:me --lease "$lease" --json >/dev/null
+# ... when done:
+agent-review review workdir --repo "$REPO" --key "$KEY" --actor agent:me --release --lease "$lease"
+```
+
+A crashed agent's lease runs out on its own. `gc` removes the directory once the pull request merges, or once it is idle long enough.
+
+This is real output, with live pull request lookups on this repository. Review 12 has an agent's lease, review 11's checkout has an uncommitted edit, and pull request 10 is merged:
+
+```text
+$ agent-review workdirs
+3 work directories; gc may remove 1, 1.9 MB
+  in-use    scalvert/agent-review 12  296.0 KB  leased by agent:claude until 2026-11-05T08:47:17.520Z
+  protected scalvert/agent-review 11  2.7 MB  checkout: 1 uncommitted or untracked path
+  done      scalvert/agent-review 10  1.9 MB  the pull request is merged; no lease, and idle 34 days
+
+$ agent-review gc --apply --actor human:steve
+removed 1 work directory, 1.9 MB
+  in-use    scalvert/agent-review 12  296.0 KB  leased by agent:claude until 2026-11-05T08:47:17.520Z
+  protected scalvert/agent-review 11  2.7 MB  checkout: 1 uncommitted or untracked path
+  removed   scalvert/agent-review 10  1.9 MB  the pull request is merged; no lease, and idle 34 days
+```
 
 The agent stops when `waitingOn` is `human`. When the person has acted, the same loop resumes from the log, in this process or a new one.
 

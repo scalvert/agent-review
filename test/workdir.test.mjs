@@ -1,28 +1,42 @@
-// Work directories and gc: scratch space per review, removed once the review
-// is done, never with its history and never with git work inside.
+// Work directories, leases and gc: scratch space per review, a status that
+// says whether it is in use, and removal only of what is done or idle,
+// never with git work inside and never with the review's history.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLOSED_GRACE_DAYS, INVALID, applyGc, openLog, planGc, reviewPaths, workdir } from "../src/index.mjs";
+import { CLOSED_GRACE_DAYS, INVALID, applyGc, openReview, planGc, readLeases, releaseWorkdir, reviewPaths, workdir } from "../src/index.mjs";
 import { repoWorkState } from "../src/adapters/git.mjs";
 import { pullState } from "../src/adapters/github.mjs";
 import { acquire, release } from "../src/core/store/lock.mjs";
+import { gitRepo } from "./helpers.mjs";
 
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
+const AGENT = "agent:test";
 const root = () => mkdtempSync(join(tmpdir(), "gc-"));
 const code = (c) => (e) => e.code === c;
 const later = (days) => Date.now() + days * DAY;
+const REPO = gitRepo({ version: 1 });
 
-// A review with one event, so it exists, and a work directory with a file.
-function review(state, key, { repo = "acme/widgets", file = "scratch.txt" } = {}) {
+// A started review (reviewing), or one reported with no findings (complete),
+// with a work directory holding one file. The lease from workdir() runs out
+// after 4 hours, so a plan a day later sees none.
+function review(state, key, { repo = "acme/widgets", file = "scratch.txt", reported = false } = {}) {
   const ref = { repo, key };
-  openLog(state, ref).append([{ type: "test.wrote", actor: "agent:test", data: {} }]);
-  const { path } = workdir(state, ref);
+  const r = openReview(state, ref);
+  r.start({ git: REPO.adapter, targetRef: "main", head: "feature", lenses: ["security"], actor: AGENT });
+  if (reported) {
+    r.recordRun({ slot: "correctness", status: "ok", model: "anthropic/opus", head: REPO.head, actor: AGENT, findings: [] });
+    r.recordRun({ slot: "security", status: "ok", model: "openai/gpt-5.5", head: REPO.head, actor: AGENT, findings: [] });
+    r.advance({ actor: AGENT });
+    r.report({ actor: AGENT });
+  }
+  const { path, lease } = workdir(state, ref, { actor: AGENT });
   if (file) writeFileSync(join(path, file), "x".repeat(4096));
-  return { ref, path, paths: reviewPaths(state, ref) };
+  return { ref, path, lease, paths: reviewPaths(state, ref) };
 }
 
 const git = (dir, ...args) => execFileSync("git", ["-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -41,60 +55,108 @@ function clone(into) {
 }
 
 const byKey = (plan) => Object.fromEntries(plan.items.map((i) => [i.key, i]));
+const status = (i) => [i.status, i.removable, i.reasons[0].code];
 
-test("workdir: needs a review, lives under it, and is created once", () => {
+test("workdir: needs a review and an actor, lives under it, and hands out a lease", () => {
   const state = root();
-  assert.throws(() => workdir(state, { repo: "acme/widgets", key: "7" }), code(INVALID));
-  const { ref, paths } = review(state, "7", { file: null });
+  assert.throws(() => workdir(state, { repo: "acme/widgets", key: "7" }, { actor: AGENT }), code(INVALID));
+  const { ref, paths, lease } = review(state, "7", { file: null });
   assert.equal(paths.work, join(paths.dir, "work"));
-  assert.ok(existsSync(paths.work));
-  assert.deepEqual(workdir(state, ref), { path: paths.work, created: false });
+  assert.throws(() => workdir(state, ref, {}), code(INVALID), "a lease names who holds it");
+  assert.throws(() => workdir(state, ref, { actor: AGENT, leaseMs: 0 }), code(INVALID));
+  assert.match(lease.id, /^[0-9a-f]{12}$/);
+  assert.equal(lease.renewed, false);
+  assert.equal(Date.parse(lease.expiresAt) - Date.parse(lease.renewedAt), 4 * HOUR);
+  assert.ok(existsSync(join(paths.dir, "leases", `${lease.id}.json`)), "leases live outside work/");
+
+  const again = workdir(state, ref, { actor: AGENT, lease: lease.id, leaseMs: 8 * HOUR });
+  assert.deepEqual([again.created, again.lease.id, again.lease.renewed, again.lease.acquiredAt], [false, lease.id, true, lease.acquiredAt]);
+  assert.throws(() => workdir(state, ref, { actor: "agent:other", lease: lease.id }), code(INVALID), "only its holder renews a lease");
+  assert.throws(() => workdir(state, ref, { actor: AGENT, lease: "../../x" }), code(INVALID));
+
+  assert.deepEqual(releaseWorkdir(state, ref, { lease: lease.id, actor: AGENT }), { released: true, lease: lease.id });
+  assert.deepEqual(releaseWorkdir(state, ref, { lease: lease.id, actor: AGENT }), { released: false, lease: lease.id }, "a retry is safe");
 });
 
-test("plan: idle reviews go, recent ones stay, and a dry run changes nothing", () => {
+test("status: a live lease is in use, whatever else is true", () => {
   const state = root();
-  review(state, "1");
-  const plan = planGc(state, { idleDays: 30, now: later(31) });
-  assert.equal(plan.items[0].action, "purge");
-  assert.deepEqual(plan.items[0].reasons.map((r) => r.code), ["idle"]);
-  assert.ok(plan.bytes.purge >= 4096);
-  assert.ok(existsSync(plan.items[0].path), "planning removes nothing");
-
-  const fresh = planGc(state, { idleDays: 30, now: later(2) });
-  assert.equal(fresh.items[0].action, "keep");
-  assert.equal(fresh.items[0].reasons[0].code, "active");
+  const { ref } = review(state, "1");
+  workdir(state, ref, { actor: "agent:long-eval", leaseMs: 7 * DAY });
+  const host = () => ({ state: "merged", reason: null });
+  const [item] = planGc(state, { idleDays: 0, now: later(2), hostState: host }).items;
+  assert.deepEqual(status(item), ["in-use", false, "leased"]);
+  assert.match(item.reasons[0].message, /leased by agent:long-eval until /);
+  assert.equal(item.leases.filter((l) => l.live).length, 1);
+  assert.equal(item.leases.filter((l) => !l.live)[0].why, "expired");
 });
 
-test("plan: a merged or closed pull request goes after the grace period; an open one waits", () => {
+test("status: a lease whose process has exited no longer counts", async () => {
   const state = root();
-  for (const k of ["1", "2", "3"]) review(state, k);
-  const host = { 1: "merged", 2: "closed", 3: "open" };
-  const hostState = (ref) => ({ state: host[ref.key], reason: null });
+  const { ref } = review(state, "1");
+  const child = spawn(process.execPath, ["-e", ""]);
+  await new Promise((r) => child.on("exit", r));
+  workdir(state, ref, { actor: AGENT, leaseMs: 7 * DAY, pid: child.pid });
+  const exited = readLeases(state, ref, { now: later(1) }).find((l) => l.pid === child.pid);
+  assert.deepEqual([exited.live, exited.why], [false, `process ${child.pid} has exited`]);
 
-  const soon = byKey(planGc(state, { idleDays: 30, now: later(0), hostState }));
-  assert.equal(soon[1].action, "keep", "not within the grace period");
+  workdir(state, ref, { actor: AGENT, leaseMs: 7 * DAY, pid: process.pid });
+  assert.equal(planGc(state, { idleDays: 0, now: later(1) }).items[0].status, "in-use", "a live process keeps it");
+});
+
+test("status: in review, paused, done and idle, from the workflow and the host", () => {
+  const state = root();
+  review(state, "reviewing");
+  review(state, "complete", { reported: true });
+  review(state, "merged", { reported: true });
+  review(state, "closed");
+  review(state, "fresh-merge");
+  const host = { merged: "merged", closed: "closed", "fresh-merge": "merged", complete: "open" };
+  const hostState = (ref) => (host[ref.key] ? { state: host[ref.key], reason: null } : null);
 
   const p = byKey(planGc(state, { idleDays: 30, now: later(CLOSED_GRACE_DAYS + 1), hostState }));
-  assert.deepEqual([p[1].action, p[1].reasons[0].code], ["purge", "host-merged"]);
-  assert.deepEqual([p[2].action, p[2].reasons[0].code], ["purge", "host-closed"]);
-  assert.equal(p[3].action, "keep");
-  assert.match(p[3].reasons[0].message, /pull request is open/);
+  assert.deepEqual(status(p.reviewing), ["in-review", false, "in-review"]);
+  assert.match(p.reviewing.reasons[0].message, /the review is reviewing \(round 1\)/);
+  assert.deepEqual(p.reviewing.review, { status: "reviewing", round: 1, waitingOn: "agent" });
+  assert.deepEqual(status(p.complete), ["paused", false, "paused"]);
+  assert.match(p.complete.reasons[0].message, /complete \(round 1\), the pull request is open/);
+  assert.deepEqual(status(p.merged), ["done", true, "host-merged"]);
+  assert.deepEqual(status(p.closed), ["done", true, "host-closed"], "a merged or closed pull request ends the review, whatever its state");
+
+  const soon = byKey(planGc(state, { idleDays: 30, now: later(0.5), hostState }));
+  assert.deepEqual(status(soon["fresh-merge"]), ["paused", false, "grace"]);
+
+  const old = byKey(planGc(state, { idleDays: 30, now: later(31), hostState }));
+  assert.deepEqual(status(old.reviewing), ["idle", true, "idle"]);
+  assert.deepEqual(status(old.complete), ["idle", true, "idle"]);
 });
 
-test("apply: removes the work directory only, never the review's history", () => {
+test("status: the list is ordered by status, and a dry run changes nothing", () => {
   const state = root();
-  const { paths } = review(state, "1");
+  review(state, "idle");
+  const busy = review(state, "busy");
+  workdir(state, busy.ref, { actor: AGENT, leaseMs: 7 * DAY });
+  const plan = planGc(state, { idleDays: 0, now: later(1) });
+  assert.deepEqual(plan.items.map((i) => [i.key, i.status]), [["busy", "in-use"], ["idle", "idle"]]);
+  assert.ok(plan.bytes.removable >= 4096);
+  assert.ok(plan.items.every((i) => existsSync(i.path)));
+});
+
+test("apply: removes the work directory and its spent leases, never the review's history", () => {
+  const state = root();
+  const { paths, ref } = review(state, "1");
   const log = readFileSync(paths.log, "utf8");
-  const done = applyGc(state, planGc(state, { idleDays: 0, now: later(1) }));
-  assert.equal(done.items[0].action, "removed");
+  const done = applyGc(state, planGc(state, { idleDays: 0, now: later(1) }), { now: later(1) });
+  assert.equal(done.items[0].removed, true);
   assert.ok(done.bytes.removed >= 4096);
   assert.ok(!existsSync(paths.work));
   assert.equal(readFileSync(paths.log, "utf8"), log);
-  assert.ok(existsSync(paths.dir));
+  assert.ok(existsSync(paths.snapshot));
+  assert.deepEqual(readdirSync(join(paths.dir, "leases")), [], "the spent lease is pruned");
+  assert.equal(openReview(state, ref).read().round, 1, "the review reads as before");
   assert.equal(planGc(state, { idleDays: 0 }).items.length, 0);
 });
 
-test("git work keeps a directory: uncommitted, untracked, unpushed or stashed", () => {
+test("git work protects a directory: uncommitted, untracked, unpushed or stashed", () => {
   const state = root();
   const cases = {
     clean: () => {},
@@ -113,15 +175,15 @@ test("git work keeps a directory: uncommitted, untracked, unpushed or stashed", 
   for (const [key, change] of Object.entries(cases)) change(clone(review(state, key, { file: null }).path));
 
   const plan = byKey(planGc(state, { idleDays: 0, now: later(1), checkRepo: repoWorkState }));
-  assert.equal(plan.clean.action, "purge", "everything in it can be fetched again");
+  assert.deepEqual(status(plan.clean), ["idle", true, "idle"], "everything in it can be fetched again");
   assert.deepEqual(
-    Object.fromEntries(Object.keys(cases).filter((k) => k !== "clean").map((k) => [k, [plan[k].action, plan[k].reasons[0].code]])),
-    { dirty: ["keep", "git-uncommitted"], untracked: ["keep", "git-uncommitted"], unpushed: ["keep", "git-unpushed"], stashed: ["keep", "git-stashed"] },
+    Object.fromEntries(Object.keys(cases).filter((k) => k !== "clean").map((k) => [k, status(plan[k])])),
+    { dirty: ["protected", false, "git-uncommitted"], untracked: ["protected", false, "git-uncommitted"], unpushed: ["protected", false, "git-unpushed"], stashed: ["protected", false, "git-stashed"] },
   );
   assert.equal(plan.unpushed.reasons[0].path, "repo");
 });
 
-test("a linked worktree on a branch can go; one with commits only its HEAD has stays", () => {
+test("a linked worktree on a branch can go; one with commits only its HEAD has is protected", () => {
   const state = root();
   const main = clone(mkdtempSync(join(tmpdir(), "gc-main-")));
   const onBranch = review(state, "branch", { file: null }).path;
@@ -137,22 +199,28 @@ test("a linked worktree on a branch can go; one with commits only its HEAD has s
   git(join(detached, "wt"), "commit", "-q", "-m", "only HEAD has this");
 
   const plan = byKey(planGc(state, { idleDays: 0, now: later(1), checkRepo: repoWorkState }));
-  assert.equal(plan.branch.action, "purge", "the branch keeps the commit in the main repository");
-  assert.deepEqual([plan.detached.action, plan.detached.reasons[0].code], ["keep", "git-unpushed"]);
+  assert.equal(plan.branch.removable, true, "the branch keeps the commit in the main repository");
+  assert.deepEqual(status(plan.detached), ["protected", false, "git-unpushed"]);
   assert.match(plan.detached.reasons[0].message, /on no remote or branch/);
 });
 
-test("a git repository git cannot read is kept", () => {
+test("protected: a repository git cannot read, or a review the harness cannot read", () => {
   const state = root();
   const { path } = review(state, "1", { file: null });
   mkdirSync(join(path, "broken"));
   writeFileSync(join(path, "broken", ".git"), "gitdir: /nonexistent/worktree\n");
   const [item] = planGc(state, { idleDays: 0, now: later(1), checkRepo: repoWorkState }).items;
-  assert.deepEqual([item.action, item.reasons[0].code], ["keep", "git-unreadable"]);
+  assert.deepEqual(status(item), ["protected", false, "git-unreadable"]);
+
+  const other = review(state, "2");
+  writeFileSync(other.paths.log, `${readFileSync(other.paths.log, "utf8")}{"not":"an event"}\n`);
+  const p = byKey(planGc(state, { idleDays: 0, now: later(1) }));
+  assert.deepEqual(status(p[2]), ["protected", false, "review-unreadable"]);
 });
 
-test("apply checks again: a held lock, a change since the plan, or new git work keeps it", () => {
+test("apply assesses again under the lock: a new lease, a held lock, a change, or new git work keeps it", () => {
   const state = root();
+  const leased = review(state, "leased");
   const locked = review(state, "locked");
   const changed = review(state, "changed");
   const gitWork = review(state, "git");
@@ -160,8 +228,9 @@ test("apply checks again: a held lock, a change since the plan, or new git work 
   writeFileSync(join(gitWork.path, "repo", ".git"), "");
   // Clean when planned, with uncommitted work by the time gc removes it.
   const plan = planGc(state, { idleDays: 0, now: later(1), checkRepo: () => [] });
-  assert.ok(plan.items.every((i) => i.action === "purge"));
+  assert.ok(plan.items.every((i) => i.removable));
 
+  workdir(state, leased.ref, { actor: "agent:late", leaseMs: 7 * DAY });
   const token = acquire(locked.paths.lock);
   const late = join(changed.path, "late.txt");
   writeFileSync(late, "x");
@@ -169,30 +238,33 @@ test("apply checks again: a held lock, a change since the plan, or new git work 
   utimesSync(late, future, future);
   const checkRepo = (r) => (r === join(gitWork.path, "repo") ? [{ code: "git-uncommitted", message: "1 uncommitted path" }] : []);
   try {
-    const done = byKey(applyGc(state, plan, { checkRepo }));
-    assert.deepEqual([done.locked.action, done.locked.reasons[0].code], ["keep", "locked"]);
-    assert.deepEqual([done.changed.action, done.changed.reasons[0].code], ["keep", "changed"]);
-    assert.deepEqual([done.git.action, done.git.reasons[0].code], ["keep", "git-uncommitted"]);
+    const done = byKey(applyGc(state, plan, { now: later(1), checkRepo }));
+    assert.deepEqual(status(done.leased), ["in-use", false, "leased"]);
+    assert.deepEqual(status(done.locked), ["protected", false, "locked"]);
+    assert.deepEqual(status(done.changed), ["protected", false, "changed"]);
+    assert.deepEqual(status(done.git), ["protected", false, "git-uncommitted"]);
     assert.match(done.git.reasons[0].message, /^repo: /);
+    assert.ok(Object.values(done).every((i) => i.removed === false));
   } finally {
     release(locked.paths.lock, token);
   }
-  for (const r of [locked, changed, gitWork]) assert.ok(existsSync(r.path));
+  for (const r of [leased, locked, changed, gitWork]) assert.ok(existsSync(r.path));
 });
 
 test("a work directory that is a link is never walked or removed", () => {
   const state = root();
   const outside = mkdtempSync(join(tmpdir(), "gc-outside-"));
   writeFileSync(join(outside, "keep.txt"), "mine");
-  openLog(state, { repo: "acme/widgets", key: "1" }).append([{ type: "test.wrote", actor: "agent:test", data: {} }]);
-  symlinkSync(outside, reviewPaths(state, { repo: "acme/widgets", key: "1" }).work);
+  const { paths } = review(state, "1", { file: null });
+  execFileSync("rm", ["-r", paths.work]);
+  symlinkSync(outside, paths.work);
   const plan = planGc(state, { idleDays: 0, now: later(1) });
-  assert.deepEqual([plan.items[0].action, plan.items[0].reasons[0].code, plan.items[0].bytes], ["keep", "not-a-directory", 0]);
+  assert.deepEqual([...status(plan.items[0]), plan.items[0].bytes], ["protected", false, "not-a-directory", 0]);
 
-  // Even a plan that says purge is checked again before anything is removed.
-  const forged = { ...plan, items: [{ ...plan.items[0], action: "purge", lastActivityAt: new Date(later(1)).toISOString() }] };
-  const [item] = applyGc(state, forged).items;
-  assert.deepEqual([item.action, item.reasons[0].code], ["keep", "outside-root"]);
+  // Even a plan that says removable is checked again before anything goes.
+  const forged = { ...plan, items: [{ ...plan.items[0], removable: true, lastActivityAt: new Date(later(1)).toISOString() }] };
+  const [item] = applyGc(state, forged, { now: later(1) }).items;
+  assert.deepEqual([item.removed, item.reasons[0].code], [false, "outside-root"]);
   assert.ok(existsSync(join(outside, "keep.txt")));
 });
 
@@ -200,7 +272,7 @@ test("plan: --repo narrows it, and idleDays must be a whole number", () => {
   const state = root();
   review(state, "1");
   review(state, "1", { repo: "acme/other" });
-  assert.deepEqual(planGc(state, { idleDays: 0, repo: "acme/other" }).items.map((i) => i.repo), ["acme/other"]);
+  assert.deepEqual(planGc(state, { idleDays: 0, now: later(1), repo: "acme/other" }).items.map((i) => i.repo), ["acme/other"]);
   assert.throws(() => planGc(state, { idleDays: -1 }), code(INVALID));
   assert.throws(() => planGc(state, { idleDays: 1.5 }), code(INVALID));
 });
@@ -210,40 +282,48 @@ test("pullState: merged, closed, open, a branch key, and a failed lookup", () =>
   assert.equal(pullState({ repo: "a/b", key: "1", api: api("closed", "2026-01-01T00:00:00Z") }).state, "merged");
   assert.equal(pullState({ repo: "a/b", key: "1", api: api("closed") }).state, "closed");
   assert.equal(pullState({ repo: "a/b", key: "1", api: api("open") }).state, "open");
-  assert.deepEqual(pullState({ repo: "a/b", key: "feat/x", api: api("open") }).state, "unknown");
+  assert.equal(pullState({ repo: "a/b", key: "feat/x", api: api("open") }).state, "unknown");
   const failed = pullState({ repo: "a/b", key: "1", api: () => { throw new Error("gh api: HTTP 404"); } });
   assert.deepEqual(failed, { state: "unknown", reason: "gh api: HTTP 404" });
 });
 
 const BIN = new URL("../src/cli/main.mjs", import.meta.url).pathname;
-function cli(state, args, { actor } = {}) {
+function cli(state, args, { actor, text = false } = {}) {
   const env = { ...process.env };
   delete env.AGENT_REVIEW_ACTOR;
-  const r = spawnSync("node", [BIN, ...args, "--state", state, "--json", ...(actor ? ["--actor", actor] : [])], { encoding: "utf8", env });
+  const r = spawnSync("node", [BIN, ...args, "--state", state, text ? "--text" : "--json", ...(actor ? ["--actor", actor] : [])], { encoding: "utf8", env });
   let json = null;
   try {
     json = JSON.parse(r.status === 0 ? r.stdout : r.stderr);
   } catch {}
-  return { status: r.status, json, stderr: r.stderr };
+  return { status: r.status, json, stdout: r.stdout, stderr: r.stderr };
 }
 
-test("the command line: workdir, a dry run, and --apply with an actor", () => {
+test("the command line: a lease, workdirs, release, a dry run, and --apply with an actor", () => {
   const state = root();
   const K = ["--repo", "acme/widgets", "--key", "7"];
-  const missing = cli(state, ["review", "workdir", ...K]);
-  assert.equal(missing.status, 1);
-  assert.equal(missing.json.error.code, INVALID);
+  assert.equal(cli(state, ["review", "workdir", ...K], { actor: AGENT }).json.error.code, INVALID, "the review must exist");
+  openReview(state, { repo: "acme/widgets", key: "7" }).start({ git: REPO.adapter, targetRef: "main", head: "feature", actor: AGENT });
 
-  openLog(state, { repo: "acme/widgets", key: "7" }).append([{ type: "test.wrote", actor: "agent:test", data: {} }]);
-  const wd = cli(state, ["review", "workdir", ...K]);
+  assert.equal(cli(state, ["review", "workdir", ...K]).status, 2, "a lease needs an actor");
+  const wd = cli(state, ["review", "workdir", ...K, "--lease-hours", "2"], { actor: AGENT });
   assert.equal(wd.status, 0, wd.stderr);
   assert.equal(wd.json.created, true);
   writeFileSync(join(wd.json.path, "out.json"), "{}");
 
+  const list = cli(state, ["workdirs", "--offline", "--idle-days", "0"]);
+  assert.equal(list.status, 0, list.stderr);
+  assert.deepEqual(list.json.items.map((i) => [i.key, i.status, i.removable]), [["7", "in-use", false]]);
+  const text = cli(state, ["workdirs", "--offline", "--idle-days", "0"], { text: true });
+  assert.match(text.stdout, /^1 work directory; gc may remove 0, 0 B\n  in-use +acme\/widgets 7 .* leased by agent:test until /);
+  assert.equal(cli(state, ["gc", "--offline", "--idle-days", "0"]).json.items[0].removable, false);
+
+  assert.equal(cli(state, ["review", "workdir", ...K, "--release"], { actor: AGENT }).status, 2, "--release needs the lease");
+  const rel = cli(state, ["review", "workdir", ...K, "--release", "--lease", wd.json.lease.id], { actor: AGENT });
+  assert.deepEqual(rel.json, { released: true, lease: wd.json.lease.id });
+
   const dry = cli(state, ["gc", "--offline", "--idle-days", "0"]);
-  assert.equal(dry.status, 0, dry.stderr);
-  assert.equal(dry.json.applied, false);
-  assert.deepEqual(dry.json.items.map((i) => [i.key, i.action]), [["7", "purge"]]);
+  assert.deepEqual([dry.json.applied, dry.json.items[0].status, dry.json.items[0].removable], [false, "idle", true]);
   assert.ok(existsSync(wd.json.path));
 
   assert.equal(cli(state, ["gc", "--offline", "--idle-days", "-1"]).status, 2);
@@ -253,7 +333,7 @@ test("the command line: workdir, a dry run, and --apply with an actor", () => {
 
   const applied = cli(state, ["gc", "--offline", "--idle-days", "0", "--apply"], { actor: "human:steve" });
   assert.equal(applied.status, 0, applied.stderr);
-  assert.deepEqual([applied.json.applied, applied.json.actor, applied.json.items[0].action], [true, "human:steve", "removed"]);
+  assert.deepEqual([applied.json.applied, applied.json.actor, applied.json.items[0].removed], [true, "human:steve", true]);
   assert.ok(!existsSync(wd.json.path));
   assert.ok(existsSync(reviewPaths(state, { repo: "acme/widgets", key: "7" }).log));
 });

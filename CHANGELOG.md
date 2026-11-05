@@ -2,11 +2,12 @@
 
 ## Unreleased
 
-Each review gets a work directory for its scratch files, and `gc` removes them once the review is done.
+Each review gets a work directory for its scratch files. Leases say who is using one, every directory has a status, and `gc` removes only those that are done or idle.
 
-- `agent-review review workdir` prints the review's `work/` directory under its state directory, and creates it. The review must exist. Nothing is written to the event log, so earlier builds read the review as before.
-- `agent-review gc` lists work directories whose pull request is merged or closed (after a day idle) or that have been idle for `--idle-days` (default 30). It is a dry run unless `--apply`, which needs an actor. A directory with uncommitted, untracked, unpushed or stashed git work, or a held lock, is always kept. Each removal checks again under the review's lock. Events and snapshots are never removed.
-- `reviewPaths()` returns `work`. New exports: `workdir`, `scanWorkdir`, `planGc`, `applyGc`, `DEFAULT_IDLE_DAYS` and `CLOSED_GRACE_DAYS`, plus `repoWorkState` from the git adapter and `pullState` from the GitHub adapter.
+- `agent-review review workdir` prints the review's `work/` directory under its state directory, creates it, and gives the caller a lease (`leases/<id>.json`, 4 hours by default). `--lease <id>` renews it, `--pid` ends it when that process exits, and `--release --lease <id>` ends it. It needs an actor. The review must exist. Nothing is written to the event log, so earlier builds read the review as before.
+- `agent-review workdirs` lists every work directory as `in-use`, `protected`, `in-review`, `paused`, `done` or `idle`, with its size, whether `gc` may remove it, and why. The status comes from leases, git work, the review's workflow state, the pull request on GitHub, and idle time.
+- `agent-review gc` removes the `done` and `idle` ones: merged or closed pull requests after a day without changes, and anything idle for `--idle-days` (default 30). It is a dry run unless `--apply`, which needs an actor. A leased directory, or one with uncommitted, untracked, unpushed or stashed git work, is never removed. Each removal assesses the directory again under the review's lock. Events and snapshots are never removed.
+- `reviewPaths()` returns `work`. New exports: `workdir`, `releaseWorkdir`, `readLeases`, `pruneLeases`, `scanWorkdir`, `assessWorkdir`, `planGc`, `applyGc`, `LEASE_SCHEMA`, `DEFAULT_LEASE_MS`, `MAX_LEASE_MS`, `DEFAULT_IDLE_DAYS`, `CLOSED_GRACE_DAYS` and `WORKDIR_STATUSES`, plus `repoWorkState` from the git adapter and `pullState` from the GitHub adapter.
 
 ## 0.3.0
 
