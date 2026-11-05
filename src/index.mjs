@@ -8,6 +8,7 @@ export { writeFileAtomic } from "./core/store/atomic.mjs";
 export { defaultStateRoot, keyFile, decodeKeyFile, listReviews, reviewPaths, legacyV1Path } from "./core/store/paths.mjs";
 export { openLog, EVENT_SCHEMA, SNAPSHOT_SCHEMA } from "./core/store/event-log.mjs";
 export { importLegacyV1, LEGACY_V1_SCHEMA, LEGACY_IMPORTED } from "./core/store/legacy-v1.mjs";
+export { workdir, releaseWorkdir, readLeases, pruneLeases, scanWorkdir, LEASE_SCHEMA, DEFAULT_LEASE_MS, MAX_LEASE_MS } from "./core/store/workdir.mjs";
 
 export { checkGlob, globToRegExp, matchPaths } from "./core/glob.mjs";
 export { DEFAULT_POLICY, POLICY_FILE, SUPPORTED_VERSIONS, DEPTHS, CATEGORIES } from "./core/policy/defaults.mjs";
@@ -22,6 +23,7 @@ export { WorkflowError, REFUSED, STALE, INVALID as WORKFLOW_INVALID, FORBIDDEN, 
 export { REDUCER_VERSION, initialState, reduce } from "./core/workflow/reducer.mjs";
 export { openReview, activeRound } from "./core/workflow/review.mjs";
 export { next, inbox } from "./core/workflow/next.mjs";
+export { assessWorkdir, planGc, applyGc, DEFAULT_IDLE_DAYS, CLOSED_GRACE_DAYS, WORKDIR_STATUSES } from "./core/workflow/workdirs.mjs";
 export { SECTIONS, placement, numberReport, publicReport, publicState } from "./core/workflow/numbers.mjs";
 
 export { versionChange } from "./core/decide/semver.mjs";

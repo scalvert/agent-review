@@ -63,6 +63,38 @@ export function renderEligibility(e) {
   return lines.join("\n");
 }
 
+// "12.4 GB", "512 KB".
+export function bytes(n) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+  return `${i ? n.toFixed(1) : n} ${units[i]}`;
+}
+
+const dirs = (n) => `${n} work ${n === 1 ? "directory" : "directories"}`;
+const line = (verb, i) => `  ${verb.padEnd(9)} ${i.repo} ${i.key}  ${bytes(i.bytes)}  ${(i.reasons ?? []).map((r) => r.message).join("; ")}`;
+
+export function renderGc(g) {
+  if (!g.items.length) return "No review has a work directory.";
+  const gone = g.items.filter((i) => (g.applied ? i.removed : i.removable));
+  const head = g.applied
+    ? `removed ${dirs(gone.length)}, ${bytes(g.bytes.removed)}`
+    : `would remove ${dirs(gone.length)}, ${bytes(g.bytes.removable)} (dry run; --apply removes them)`;
+  const verb = (i) => (g.applied ? (i.removed ? "removed" : i.status) : i.removable ? "remove" : i.status);
+  return [head, ...g.items.map((i) => line(verb(i), i))].join("\n");
+}
+
+// One line per work directory: its status, size and why.
+export function renderWorkdirs(g) {
+  if (!g.items.length) return "No review has a work directory.";
+  const removable = g.items.filter((i) => i.removable);
+  const head = `${dirs(g.items.length)}; gc may remove ${removable.length}, ${bytes(g.bytes.removable)}`;
+  return [head, ...g.items.map((i) => line(i.status, i))].join("\n");
+}
+
 export function renderError(e) {
   const reasons = e.reasons ?? e.errors ?? [];
   return [`refused: ${e.message.split("\n")[0]}`, ...reasons.map((r) => `  - ${r.path ? `${r.path}: ` : ""}${r.message}`)].join("\n");

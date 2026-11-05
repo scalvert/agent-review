@@ -8,7 +8,7 @@
 // exits 2.
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { gitAdapter } from "../adapters/git.mjs";
+import { gitAdapter, repoWorkState } from "../adapters/git.mjs";
 import {
   inbox,
   listReviews,
@@ -19,15 +19,15 @@ import {
   trustedPolicy,
   POLICY_FILE,
 } from "../index.mjs";
-import { renderEligibility, renderError, renderInbox, renderNext } from "./render.mjs";
+import { renderEligibility, renderError, renderGc, renderInbox, renderNext, renderWorkdirs } from "./render.mjs";
 import { cliStateRoot } from "./state-root.mjs";
 
 // The state root the command line uses, for consumers that read the same
 // reviews.
 export { cliStateRoot };
-import { githubFacts } from "../adapters/github.mjs";
+import { githubFacts, pullState } from "../adapters/github.mjs";
 import { npmDependencyChanges } from "../adapters/npm.mjs";
-import { activeRound, dryRunExecutor, evaluateEligibility, importLegacyV1, legacyV1Path, localFacts, prepareMerge } from "../index.mjs";
+import { activeRound, applyGc, dryRunExecutor, evaluateEligibility, importLegacyV1, legacyV1Path, localFacts, planGc, prepareMerge, releaseWorkdir, workdir, DEFAULT_IDLE_DAYS, DEFAULT_LEASE_MS } from "../index.mjs";
 
 class UsageError extends Error {}
 
@@ -206,6 +206,39 @@ const COMMANDS = {
       return [...inbox(readable), ...items];
     },
   },
+  "review workdir": {
+    summary: "The review's work directory for scratch files, created if missing, with a lease that keeps gc away. --lease <id> renews a lease; --release ends it.",
+    options: { lease: { type: "string" }, "lease-hours": { type: "string" }, pid: { type: "string" }, release: { type: "boolean" } },
+    run: (o, h) => {
+      const ref = { repo: need(o, "repo"), key: need(o, "key") };
+      if (o.release) {
+        if (o["lease-hours"] != null || o.pid != null) throw new UsageError("--release takes only --lease");
+        return releaseWorkdir(h.root(), ref, { lease: need(o, "lease"), actor: h.actor() });
+      }
+      const hours = o["lease-hours"] == null ? DEFAULT_LEASE_MS / 3_600_000 : wholeNumber("lease-hours", o["lease-hours"], "hours");
+      const pid = o.pid == null ? null : wholeNumber("pid", o.pid, "a process ID");
+      return workdir(h.root(), ref, { actor: h.actor(), lease: o.lease ?? null, leaseMs: hours * 3_600_000, pid });
+    },
+  },
+  workdirs: {
+    summary: "Every review's work directory: in use, protected, in review, paused, done or idle, and whether gc may remove it.",
+    options: { "idle-days": { type: "string" }, offline: { type: "boolean" } },
+    readOnly: true,
+    noRef: true,
+    run: (o, h) => gcPlan(o, h),
+  },
+  gc: {
+    summary: "Remove the work directories that are done or idle. A dry run unless --apply. Never removes one in use or with git work, or any review history.",
+    options: { "idle-days": { type: "string" }, apply: { type: "boolean" }, offline: { type: "boolean" } },
+    noRef: true,
+    run: (o, h) => {
+      // Removing files changes state, so it needs an actor; a dry run does not.
+      const actor = o.apply ? h.actor() : null;
+      const plan = gcPlan(o, h);
+      if (!o.apply) return { applied: false, ...plan };
+      return { applied: true, actor, ...applyGc(h.root(), plan, { checkRepo: repoWorkState }) };
+    },
+  },
   "policy check": {
     summary: "Validate a policy file, or show the trusted policy for a target ref.",
     options: { file: { type: "string" }, target: { type: "string" }, head: { type: "string" } },
@@ -237,6 +270,16 @@ function toNumber(name, s) {
   throw new UsageError(`--${name} takes a number from 1, got ${JSON.stringify(s)}`);
 }
 const number = (o, name) => toNumber(name, need(o, name));
+function wholeNumber(name, s, what = "days") {
+  if (/^[0-9]+$/.test(s)) return Number(s);
+  throw new UsageError(`--${name} takes a whole number of ${what}, got ${JSON.stringify(s)}`);
+}
+
+function gcPlan(o, h) {
+  const idleDays = o["idle-days"] == null ? DEFAULT_IDLE_DAYS : wholeNumber("idle-days", o["idle-days"]);
+  const hostState = o.offline ? () => null : (ref) => pullState(ref);
+  return planGc(h.root(), { idleDays, repo: o.repo ?? null, hostState, checkRepo: repoWorkState });
+}
 const numbers = (o, name) => list(need(o, name)).map((s) => toNumber(name, s));
 
 // A file the caller named that cannot be read is a usage error, exit 2.
@@ -341,6 +384,9 @@ export function main(argv, { env = process.env, stdout = process.stdout, stderr 
         : name === "review next" ? renderNext(out)
         : name === "inbox" ? renderInbox(out)
         : name === "eligibility check" ? renderEligibility(out)
+        : name === "gc" ? renderGc(out)
+        : name === "workdirs" ? renderWorkdirs(out)
+        : name === "review workdir" ? (out.path ? `${out.path}\nlease ${out.lease.id} until ${out.lease.expiresAt}` : `${out.released ? "released" : "no such lease"} ${out.lease}`)
         : JSON.stringify(out, null, 2);
       stdout.write(`${text}\n`);
     } else stdout.write(`${JSON.stringify(out, null, 2)}\n`);

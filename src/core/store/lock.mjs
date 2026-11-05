@@ -29,7 +29,8 @@ export const DEFAULT_STALE_MS = 30_000;
 
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-function alive(pid) {
+// Whether a process with this PID is running on this machine.
+export function alive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);

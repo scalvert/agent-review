@@ -10,6 +10,8 @@ Each review has an append-only event log and a snapshot derived from it. People 
     events.jsonl    one event per line, the record of truth
     snapshot.json   a cache, rebuilt from the log when it is missing or stale
     lock            present only while a writer holds it
+    work/           scratch files for the review, created by review workdir
+    leases/<id>.json  who is using work/, and until when
   reviews/<owner>/<repo>/<key>.json   v1 ledgers, read but never changed
 ```
 
@@ -46,6 +48,59 @@ These hold for writers on one machine.
 An append writes all of its lines in one write and calls `fsync` before it returns. Each snapshot is written to a unique temporary file and then renamed into place.
 
 Not covered: a state root shared between machines over a network file system, where `O_EXCL` and PIDs are not reliable.
+
+## Work directories and gc
+
+A review often needs scratch space: a checkout of the pull request head, a model's profile, eval output. `workdir(root, ref, { actor })` (`agent-review review workdir`) returns the review's `work/` directory, creates it if it is missing, and gives the caller a lease. The review must already exist. Nothing is written to the event log, so older builds read the review as before.
+
+### Leases
+
+A lease says "I am using this directory". Nothing else can say that: reading files does not change their times, and a process can sit in a directory for hours without writing.
+
+- A lease names its actor and runs for `leaseMs` (4 hours by default, at most 7 days; `--lease-hours`).
+- Pass the lease ID back to renew it (`--lease <id>`). Renewing a lease that ran out takes it again under the same ID. Only its actor can renew or release it.
+- `releaseWorkdir` (`--release --lease <id>`) ends it. Releasing a lease that is gone is not an error.
+- `pid` (`--pid`) ends a lease early, once that process exits, so a crashed agent does not hold a directory for the rest of its lease. A PID never makes a lease last longer. Pass the PID of the long-running process, not of the shell that runs the command.
+- Each lease is its own file, so parallel agents never overwrite each other's.
+- A lease file that cannot be read counts as live until it is older than the longest lease.
+
+### Status
+
+`planGc(root, options)` gives every work directory one status, whether it is `removable`, and why. `agent-review workdirs` lists them. The first status that applies wins:
+
+| Status | When | Removable |
+|---|---|---|
+| `in-use` | A live lease | No |
+| `protected` | Something would be lost or cannot be checked (below) | No |
+| `done` | The pull request is merged or closed, and nothing changed for a day (`CLOSED_GRACE_DAYS`) | Yes |
+| `idle` | Nothing in the directory or the log changed for `idleDays` (default 30, `--idle-days`) | Yes |
+| `in-review` | The round is `reviewing` or `verifying` | No |
+| `paused` | The review is `reported`, `complete`, `invalidated` or `not-started`, or its pull request merged less than a day ago | No |
+
+The command line asks GitHub for numeric keys; `--offline` skips it. A branch key, or a failed lookup, is `unknown`, and only the workflow and idle time count.
+
+A directory is `protected` when:
+
+| Reason | Code |
+|---|---|
+| A git repository inside it has uncommitted or untracked paths | `git-uncommitted` |
+| A clone has commits that no remote has, on any branch or HEAD. For a linked worktree, whose branches stay in the main repository, only commits that nothing but its HEAD reaches count | `git-unpushed` |
+| A git repository inside it has stashes | `git-stashed` |
+| Git cannot read a repository inside it | `git-unreadable` |
+| A writer holds the review's lock | `locked` |
+| A directory inside it cannot be read | `unreadable` |
+| `work` is a link or a file, not a directory | `not-a-directory` |
+| The review's log cannot be read | `review-unreadable` |
+
+### gc
+
+`applyGc(root, plan)` (`agent-review gc --apply`) removes what the plan marked removable. `gc` without `--apply` is a dry run. For each directory it holds the review's lock and assesses it again, with the host state from the plan. A directory that gained a lease, changed since the plan, now holds git work, or resolves outside the state root is kept with the new reasons. Holding the lock means no lease can be taken between the check and the removal.
+
+It removes `work/` and the leases that no longer count. `events.jsonl` and `snapshot.json` are never removed, so a collected review keeps its whole history.
+
+A process that never asks for a lease, such as a person in a terminal, is not seen. The workflow status and idle time still apply, and git work is still protected.
+
+Removing a linked worktree's directory leaves its registration in the main repository. `git worktree prune` there clears it.
 
 ## Migrating v1 ledgers
 
