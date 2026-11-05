@@ -33,6 +33,8 @@
 | `review next` | Shows what is needed next, and who it waits on |
 | `review status` | Shows the full state, with candidates and findings by number |
 | `inbox` | Shows everything waiting on a person, across reviews |
+| `review workdir` | Prints the review's work directory for scratch files, such as a checkout or eval output, and creates it if it is missing. Put review scratch here, not in the repository under review, so `gc` can remove it. |
+| `gc` | Lists the work directories of merged, closed or idle reviews, and what each holds. `--apply` removes them, and needs an actor. `--idle-days <n>` (default 30), `--repo` to narrow it, `--offline` to skip GitHub. A directory with uncommitted, unpushed or stashed git work is always kept. Review history is never removed. See [the store](store.md#work-directories-and-gc). |
 | `policy check` | Validates a policy file, or shows the trusted policy for a target |
 
 ## A person's walkthrough
@@ -113,6 +115,8 @@ while true; do
   esac
 done
 ```
+
+Scratch files go in `agent-review review workdir --repo "$REPO" --key "$KEY" --json | jq -r .path`, not in the repository under review, so `gc` can remove them once the pull request merges.
 
 The agent stops when `waitingOn` is `human`. When the person has acted, the same loop resumes from the log, in this process or a new one.
 

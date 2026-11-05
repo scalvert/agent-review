@@ -63,6 +63,28 @@ export function renderEligibility(e) {
   return lines.join("\n");
 }
 
+// "12.4 GB", "512 KB".
+export function bytes(n) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+  return `${i ? n.toFixed(1) : n} ${units[i]}`;
+}
+
+export function renderGc(g) {
+  if (!g.items.length) return "No review has a work directory.";
+  const gone = g.items.filter((i) => i.action === (g.applied ? "removed" : "purge"));
+  const total = g.applied ? g.bytes.removed : g.bytes.purge;
+  const head = g.applied
+    ? `removed ${gone.length} work ${gone.length === 1 ? "directory" : "directories"}, ${bytes(total)}`
+    : `would remove ${gone.length} work ${gone.length === 1 ? "directory" : "directories"}, ${bytes(total)} (dry run; --apply removes them)`;
+  const verb = { purge: "remove", removed: "removed", keep: "keep" };
+  return [head, ...g.items.map((i) => `  ${verb[i.action].padEnd(7)} ${i.repo} ${i.key}  ${bytes(i.bytes)}  ${(i.reasons ?? []).map((r) => r.message).join("; ")}`)].join("\n");
+}
+
 export function renderError(e) {
   const reasons = e.reasons ?? e.errors ?? [];
   return [`refused: ${e.message.split("\n")[0]}`, ...reasons.map((r) => `  - ${r.path ? `${r.path}: ` : ""}${r.message}`)].join("\n");

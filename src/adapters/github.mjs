@@ -26,6 +26,19 @@ function pages(api, path) {
   return out;
 }
 
+// Whether a review's pull request is open, merged or closed, for gc. A key
+// that is not a pull request number, or a failed lookup, is "unknown" with
+// the reason, and gc then goes by idle time alone.
+export function pullState({ repo, key, api = ghApi }) {
+  if (!/^[1-9][0-9]*$/.test(String(key))) return { state: "unknown", reason: "the key is a branch, not a pull request number" };
+  try {
+    const pr = api(`repos/${repo}/pulls/${key}`);
+    return { state: pr.merged_at ? "merged" : pr.state === "closed" ? "closed" : "open", reason: null };
+  } catch (e) {
+    return { state: "unknown", reason: e.message.split("\n")[0] };
+  }
+}
+
 // Facts the host knows. mergeBase, policyDigest and dependencyChanges come
 // from the local repository; the caller adds them.
 export function githubFacts({ repo, number, api = ghApi, now = () => new Date().toISOString() }) {

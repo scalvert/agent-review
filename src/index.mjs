@@ -8,6 +8,7 @@ export { writeFileAtomic } from "./core/store/atomic.mjs";
 export { defaultStateRoot, keyFile, decodeKeyFile, listReviews, reviewPaths, legacyV1Path } from "./core/store/paths.mjs";
 export { openLog, EVENT_SCHEMA, SNAPSHOT_SCHEMA } from "./core/store/event-log.mjs";
 export { importLegacyV1, LEGACY_V1_SCHEMA, LEGACY_IMPORTED } from "./core/store/legacy-v1.mjs";
+export { workdir, scanWorkdir, planGc, applyGc, DEFAULT_IDLE_DAYS, CLOSED_GRACE_DAYS } from "./core/store/workdir.mjs";
 
 export { checkGlob, globToRegExp, matchPaths } from "./core/glob.mjs";
 export { DEFAULT_POLICY, POLICY_FILE, SUPPORTED_VERSIONS, DEPTHS, CATEGORIES } from "./core/policy/defaults.mjs";

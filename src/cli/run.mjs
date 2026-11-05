@@ -8,7 +8,7 @@
 // exits 2.
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { gitAdapter } from "../adapters/git.mjs";
+import { gitAdapter, repoWorkState } from "../adapters/git.mjs";
 import {
   inbox,
   listReviews,
@@ -19,15 +19,15 @@ import {
   trustedPolicy,
   POLICY_FILE,
 } from "../index.mjs";
-import { renderEligibility, renderError, renderInbox, renderNext } from "./render.mjs";
+import { renderEligibility, renderError, renderGc, renderInbox, renderNext } from "./render.mjs";
 import { cliStateRoot } from "./state-root.mjs";
 
 // The state root the command line uses, for consumers that read the same
 // reviews.
 export { cliStateRoot };
-import { githubFacts } from "../adapters/github.mjs";
+import { githubFacts, pullState } from "../adapters/github.mjs";
 import { npmDependencyChanges } from "../adapters/npm.mjs";
-import { activeRound, dryRunExecutor, evaluateEligibility, importLegacyV1, legacyV1Path, localFacts, prepareMerge } from "../index.mjs";
+import { activeRound, applyGc, dryRunExecutor, evaluateEligibility, importLegacyV1, legacyV1Path, localFacts, planGc, prepareMerge, workdir, DEFAULT_IDLE_DAYS } from "../index.mjs";
 
 class UsageError extends Error {}
 
@@ -206,6 +206,25 @@ const COMMANDS = {
       return [...inbox(readable), ...items];
     },
   },
+  "review workdir": {
+    summary: "The review's work directory for scratch files, such as a checkout or eval output, created if missing. gc removes it once the review is done.",
+    options: {},
+    run: (o, h) => workdir(h.root(), { repo: need(o, "repo"), key: need(o, "key") }),
+  },
+  gc: {
+    summary: "Remove the work directories of merged, closed or idle reviews. A dry run unless --apply. Review history is never touched.",
+    options: { "idle-days": { type: "string" }, apply: { type: "boolean" }, offline: { type: "boolean" } },
+    noRef: true,
+    run: (o, h) => {
+      const idleDays = o["idle-days"] == null ? DEFAULT_IDLE_DAYS : wholeNumber("idle-days", o["idle-days"]);
+      // Removing files changes state, so it needs an actor; a dry run does not.
+      const actor = o.apply ? h.actor() : null;
+      const hostState = o.offline ? () => null : (ref) => pullState(ref);
+      const plan = planGc(h.root(), { idleDays, repo: o.repo ?? null, hostState, checkRepo: repoWorkState });
+      if (!o.apply) return { applied: false, ...plan };
+      return { applied: true, actor, ...applyGc(h.root(), plan, { checkRepo: repoWorkState }) };
+    },
+  },
   "policy check": {
     summary: "Validate a policy file, or show the trusted policy for a target ref.",
     options: { file: { type: "string" }, target: { type: "string" }, head: { type: "string" } },
@@ -237,6 +256,10 @@ function toNumber(name, s) {
   throw new UsageError(`--${name} takes a number from 1, got ${JSON.stringify(s)}`);
 }
 const number = (o, name) => toNumber(name, need(o, name));
+function wholeNumber(name, s) {
+  if (/^[0-9]+$/.test(s)) return Number(s);
+  throw new UsageError(`--${name} takes a whole number of days, 0 or more, got ${JSON.stringify(s)}`);
+}
 const numbers = (o, name) => list(need(o, name)).map((s) => toNumber(name, s));
 
 // A file the caller named that cannot be read is a usage error, exit 2.
@@ -341,6 +364,8 @@ export function main(argv, { env = process.env, stdout = process.stdout, stderr 
         : name === "review next" ? renderNext(out)
         : name === "inbox" ? renderInbox(out)
         : name === "eligibility check" ? renderEligibility(out)
+        : name === "gc" ? renderGc(out)
+        : name === "review workdir" ? out.path
         : JSON.stringify(out, null, 2);
       stdout.write(`${text}\n`);
     } else stdout.write(`${JSON.stringify(out, null, 2)}\n`);

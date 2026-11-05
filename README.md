@@ -38,7 +38,7 @@ agent-review review next --repo acme/widgets --key 7
 - [Workflow](docs/workflow.md): states, steps, independence and retries.
 - [Policy](docs/policy.md): `agent-review.json`, and why a change cannot weaken it.
 - [Eligibility](docs/eligibility.md): merge rules, such as Dependabot patch updates, and the dry run.
-- [Store](docs/store.md): the event log, locking and the v1 import.
+- [Store](docs/store.md): the event log, locking, work directories and gc, and the v1 import.
 
 ## Limits
 

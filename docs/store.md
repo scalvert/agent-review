@@ -10,6 +10,7 @@ Each review has an append-only event log and a snapshot derived from it. People 
     events.jsonl    one event per line, the record of truth
     snapshot.json   a cache, rebuilt from the log when it is missing or stale
     lock            present only while a writer holds it
+    work/           scratch files for the review, created by review workdir
   reviews/<owner>/<repo>/<key>.json   v1 ledgers, read but never changed
 ```
 
@@ -46,6 +47,33 @@ These hold for writers on one machine.
 An append writes all of its lines in one write and calls `fsync` before it returns. Each snapshot is written to a unique temporary file and then renamed into place.
 
 Not covered: a state root shared between machines over a network file system, where `O_EXCL` and PIDs are not reliable.
+
+## Work directories and gc
+
+A review often needs scratch space: a checkout of the pull request head, a model's profile, eval output. `workdir(root, ref)` (`agent-review review workdir`) returns the review's `work/` directory and creates it if it is missing. The review must already exist. Nothing is written to the event log, so older builds read the review as before.
+
+`planGc(root, options)` says which work directories can go, and `applyGc(root, plan)` removes them. `agent-review gc` runs both: a dry run by default, and a removal with `--apply`.
+
+A work directory can go when either is true:
+
+- The pull request is merged or closed, and nothing in the directory or the log changed for a day (`CLOSED_GRACE_DAYS`). The command line asks GitHub for numeric keys; `--offline` skips it. A branch key, or a failed lookup, is `unknown`, and only idle time counts.
+- Nothing in the directory or the log changed for `idleDays` (default 30, `--idle-days`).
+
+It is kept, whatever the above says, when:
+
+| Reason | Code |
+|---|---|
+| A git repository inside it has uncommitted or untracked paths | `git-uncommitted` |
+| A clone has commits that no remote has, on any branch or HEAD. For a linked worktree, whose branches stay in the main repository, only commits that nothing but its HEAD reaches count | `git-unpushed` |
+| A git repository inside it has stashes | `git-stashed` |
+| Git cannot read a repository inside it | `git-unreadable` |
+| A writer holds the review's lock | `locked` |
+| A directory inside it cannot be read | `unreadable` |
+| `work` is a link or a file, not a directory | `not-a-directory` |
+
+`applyGc` checks each directory again under the review's lock just before it removes it. A directory that changed since the plan, now holds git work, or resolves outside the state root is kept. `events.jsonl` and `snapshot.json` are never removed, so a collected review keeps its whole history.
+
+Removing a linked worktree's directory leaves its registration in the main repository. `git worktree prune` there clears it.
 
 ## Migrating v1 ledgers
 

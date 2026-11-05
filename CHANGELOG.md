@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Each review gets a work directory for its scratch files, and `gc` removes them once the review is done.
+
+- `agent-review review workdir` prints the review's `work/` directory under its state directory, and creates it. The review must exist. Nothing is written to the event log, so earlier builds read the review as before.
+- `agent-review gc` lists work directories whose pull request is merged or closed (after a day idle) or that have been idle for `--idle-days` (default 30). It is a dry run unless `--apply`, which needs an actor. A directory with uncommitted, untracked, unpushed or stashed git work, or a held lock, is always kept. Each removal checks again under the review's lock. Events and snapshots are never removed.
+- `reviewPaths()` returns `work`. New exports: `workdir`, `scanWorkdir`, `planGc`, `applyGc`, `DEFAULT_IDLE_DAYS` and `CLOSED_GRACE_DAYS`, plus `repoWorkState` from the git adapter and `pullState` from the GitHub adapter.
+
 ## 0.3.0
 
 Findings are named by number. Internal keys such as `F2` never reach a person, so they cannot end up in a report or a pull request comment.
