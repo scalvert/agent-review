@@ -7,8 +7,11 @@ import { join } from "node:path";
 // gc: uncommitted or untracked files, commits on no remote, or stashes. An
 // empty list means everything in it can be fetched again. If git cannot
 // read the repository, it is kept: an unknown state is not a clean one.
+// --no-optional-locks stops git status from refreshing the index on disk:
+// that write would count as new activity in the directory, so checking it
+// would reset its idle time and make gc see it as changed.
 export function repoWorkState(dir) {
-  const git = (args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "pipe"] });
+  const git = (args) => execFileSync("git", ["--no-optional-locks", "-C", dir, ...args], { encoding: "utf8", maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "pipe"] });
   const reasons = [];
   try {
     const changed = git(["status", "--porcelain", "--untracked-files=normal"]).split("\n").filter(Boolean).length;

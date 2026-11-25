@@ -34,7 +34,8 @@ function checkLeaseId(id) {
 // that lease, or takes it again under the same ID if it ran out. The lease
 // runs leaseMs from now. A pid ends it early: once that process exits, the
 // lease no longer counts, so a crashed agent does not hold a directory for
-// the rest of its lease. A pid never makes a lease last longer.
+// the rest of its lease. A pid never makes a lease last longer. A renewal
+// without a pid keeps the one the lease already has.
 export function workdir(root, ref, { actor, lease = null, leaseMs = DEFAULT_LEASE_MS, pid = null, now = Date.now() } = {}) {
   const paths = reviewPaths(root, ref);
   if (typeof actor !== "string" || !ACTOR.test(actor)) throw new StoreError(INVALID, `actor must be human:<name> or agent:<runtime>, got ${JSON.stringify(actor)}`);
@@ -55,7 +56,7 @@ export function workdir(root, ref, { actor, lease = null, leaseMs = DEFAULT_LEAS
       schema: LEASE_SCHEMA,
       id,
       actor,
-      pid,
+      pid: pid ?? before?.pid ?? null,
       acquiredAt: before?.acquiredAt ?? new Date(now).toISOString(),
       renewedAt: new Date(now).toISOString(),
       expiresAt: new Date(now + leaseMs).toISOString(),
@@ -69,12 +70,13 @@ export function workdir(root, ref, { actor, lease = null, leaseMs = DEFAULT_LEAS
 // retry is safe.
 export function releaseWorkdir(root, ref, { lease, actor }) {
   checkLeaseId(lease);
+  if (typeof actor !== "string" || !ACTOR.test(actor)) throw new StoreError(INVALID, `actor must be human:<name> or agent:<runtime>, got ${JSON.stringify(actor)}`);
   const paths = reviewPaths(root, ref);
   return withLock(paths.lock, () => {
     const file = leaseFile(paths, lease);
     const held = readLease(file);
     if (!held) return { released: false, lease };
-    if (actor && held.actor !== actor) throw new StoreError(INVALID, `lease ${lease} belongs to ${held.actor}, not ${actor}`);
+    if (held.actor !== actor) throw new StoreError(INVALID, `lease ${lease} belongs to ${held.actor}, not ${actor}`);
     unlinkSync(file);
     return { released: true, lease };
   });

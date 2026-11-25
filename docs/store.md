@@ -60,7 +60,7 @@ A lease says "I am using this directory". Nothing else can say that: reading fil
 - A lease names its actor and runs for `leaseMs` (4 hours by default, at most 7 days; `--lease-hours`).
 - Pass the lease ID back to renew it (`--lease <id>`). Renewing a lease that ran out takes it again under the same ID. Only its actor can renew or release it.
 - `releaseWorkdir` (`--release --lease <id>`) ends it. Releasing a lease that is gone is not an error.
-- `pid` (`--pid`) ends a lease early, once that process exits, so a crashed agent does not hold a directory for the rest of its lease. A PID never makes a lease last longer. Pass the PID of the long-running process, not of the shell that runs the command.
+- `pid` (`--pid`) ends a lease early, once that process exits, so a crashed agent does not hold a directory for the rest of its lease. A PID never makes a lease last longer. Pass the PID of the long-running process, not of the shell that runs the command. A renewal without `--pid` keeps the PID the lease already has.
 - Each lease is its own file, so parallel agents never overwrite each other's.
 - A lease file that cannot be read counts as live until it is older than the longest lease.
 

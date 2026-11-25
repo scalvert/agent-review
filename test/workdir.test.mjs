@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLOSED_GRACE_DAYS, INVALID, applyGc, openReview, planGc, readLeases, releaseWorkdir, reviewPaths, workdir } from "../src/index.mjs";
@@ -74,6 +74,13 @@ test("workdir: needs a review and an actor, lives under it, and hands out a leas
   assert.throws(() => workdir(state, ref, { actor: "agent:other", lease: lease.id }), code(INVALID), "only its holder renews a lease");
   assert.throws(() => workdir(state, ref, { actor: AGENT, lease: "../../x" }), code(INVALID));
 
+  for (const actor of [undefined, null, "", "nobody"]) {
+    assert.throws(() => releaseWorkdir(state, ref, { lease: lease.id, actor }), code(INVALID), "a release names who holds the lease");
+  }
+  assert.throws(() => releaseWorkdir(state, ref, { lease: lease.id }), code(INVALID));
+  assert.throws(() => releaseWorkdir(state, ref, { lease: lease.id, actor: "agent:other" }), code(INVALID), "only its holder releases a lease");
+  assert.equal(readLeases(state, ref).find((l) => l.id === lease.id).live, true, "a refused release leaves the lease");
+
   assert.deepEqual(releaseWorkdir(state, ref, { lease: lease.id, actor: AGENT }), { released: true, lease: lease.id });
   assert.deepEqual(releaseWorkdir(state, ref, { lease: lease.id, actor: AGENT }), { released: false, lease: lease.id }, "a retry is safe");
 });
@@ -101,6 +108,27 @@ test("status: a lease whose process has exited no longer counts", async () => {
 
   workdir(state, ref, { actor: AGENT, leaseMs: 7 * DAY, pid: process.pid });
   assert.equal(planGc(state, { idleDays: 0, now: later(1) }).items[0].status, "in-use", "a live process keeps it");
+});
+
+test("status: renewing a lease without a pid keeps the process it was bound to", async () => {
+  const state = root();
+  const { ref } = review(state, "1");
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]);
+  const exit = new Promise((r) => child.on("exit", r));
+  try {
+    const { lease } = workdir(state, ref, { actor: AGENT, leaseMs: 7 * DAY, pid: child.pid });
+    const renewed = workdir(state, ref, { actor: AGENT, lease: lease.id, leaseMs: 7 * DAY });
+    assert.equal(renewed.lease.pid, child.pid);
+    assert.equal(readLeases(state, ref).find((l) => l.id === lease.id).live, true);
+    const other = workdir(state, ref, { actor: AGENT, lease: lease.id, leaseMs: 7 * DAY, pid: process.pid });
+    assert.equal(other.lease.pid, process.pid, "a pid given on renewal replaces it");
+    workdir(state, ref, { actor: AGENT, lease: lease.id, leaseMs: 7 * DAY, pid: child.pid });
+  } finally {
+    child.kill();
+  }
+  await exit;
+  const [l] = readLeases(state, ref).filter((x) => x.pid === child.pid);
+  assert.deepEqual([l.live, l.why], [false, `process ${child.pid} has exited`]);
 });
 
 test("status: in review, paused, done and idle, from the workflow and the host", () => {
@@ -181,6 +209,29 @@ test("git work protects a directory: uncommitted, untracked, unpushed or stashed
     { dirty: ["protected", false, "git-uncommitted"], untracked: ["protected", false, "git-uncommitted"], unpushed: ["protected", false, "git-unpushed"], stashed: ["protected", false, "git-stashed"] },
   );
   assert.equal(plan.unpushed.reasons[0].path, "repo");
+});
+
+test("checking a clone does not rewrite its index, so planning neither moves its idle time nor stops gc", () => {
+  const state = root();
+  const { ref, path, lease } = review(state, "1", { file: null });
+  releaseWorkdir(state, ref, { lease: lease.id, actor: AGENT });
+  const dir = clone(path);
+  // Touch a tracked file without changing it, so the index's cached stat
+  // data is stale and a plain git status would refresh and write the index.
+  const index = join(dir, ".git", "index");
+  const old = new Date(Date.now() - HOUR);
+  utimesSync(index, old, old);
+  const touched = new Date(Date.now() - HOUR / 2);
+  utimesSync(join(dir, "a.txt"), touched, touched);
+  const before = statSync(index).mtimeMs;
+
+  const plan = planGc(state, { idleDays: 0, checkRepo: repoWorkState });
+  assert.deepEqual(status(plan.items[0]), ["idle", true, "idle"]);
+  assert.equal(statSync(index).mtimeMs, before, "planning leaves the index alone");
+
+  const done = applyGc(state, plan, { checkRepo: repoWorkState });
+  assert.equal(done.items[0].removed, true, JSON.stringify(done.items[0].reasons));
+  assert.ok(!existsSync(path));
 });
 
 test("a linked worktree on a branch can go; one with commits only its HEAD has is protected", () => {
