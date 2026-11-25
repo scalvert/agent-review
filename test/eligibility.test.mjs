@@ -264,9 +264,10 @@ test("a disputed finding: rejecting it drops it; approving it makes it real, and
     const d = (kind, label, model) => review.decide({ candidate: 1, kind, label, probability: 0.9, rationale: "r", verifier: { model }, head: repo.head, actor: A });
     d("finding-verification", "confirmed", "openai/gpt-5.5");
     d("finding-verification", "refuted", "google/gemini-3");
-    assert.deepEqual(next(review.read()).action.findings.map((x) => x.kinds), [["finding-severity", "finding-origin"]], "a disputed finding is rated before a person settles it");
+    assert.deepEqual(next(review.read()).action.findings.map((x) => x.kinds), [["finding-severity", "finding-origin", "finding-triage"]], "a disputed finding is rated and triaged before a person settles it");
     d("finding-severity", "blocker", "openai/gpt-5.5");
     d("finding-origin", "introduced", "openai/gpt-5.5");
+    d("finding-triage", "agent-fixable", "openai/gpt-5.5");
     review.classify({ category: "deps-patch", probability: 0.95, rationale: "r", classifier: { model: "openai/gpt-5.5" }, head: repo.head, actor: A });
     review.report({ actor: A });
     const x = review.read().escalations.find((e) => e.code === "verifiers-disagree");

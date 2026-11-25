@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `review report` refuses with the new reason code `no-triage` while a confirmed or disputed candidate has no `finding-triage` decision. 0.3.0 reported it, and then no triage could be recorded, so a `needs-judgment` call could never be made on it. `review next` asks for triage on disputed candidates as well as confirmed ones.
+- The round cap counts imported v1 rounds once per head: a v1 retry at a head v1 had already reviewed is not a round. A v1 round with no recorded head still counts on its own.
+- `review next` shows `roundsSoFar` with the same count, so a v1 ledger with two rounds at one head and one at another shows 2 where 0.3.0 showed 3. `legacy[].rounds` in `review status` still holds the raw v1 round count.
+
 ## 0.3.0
 
 Findings are named by number. Internal keys such as `F2` never reach a person, so they cannot end up in a report or a pull request comment.
