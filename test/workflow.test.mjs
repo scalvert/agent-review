@@ -219,10 +219,13 @@ test("verifiers that disagree go to a person; only a person resolves it", () => 
   v(1, GPT, "confirmed");
   v(1, SONNET, "refuted", 0.3);
   v(2, OPUS, "refuted", 0.2);
-  assert.throws(() => review.report({ actor: AGENT }), refused(REFUSED, ["no-severity", "no-origin"]), "a disputed finding is rated before a person settles it");
+  assert.throws(() => review.report({ actor: AGENT }), refused(REFUSED, ["no-severity", "no-origin", "no-triage"]), "a disputed finding is rated and triaged before a person settles it");
+  assert.deepEqual(next(review.read()).action.findings.map((x) => x.kinds), [["finding-severity", "finding-origin", "finding-triage"]]);
   for (const [kind, label] of [["finding-severity", "should-fix"], ["finding-origin", "introduced"]]) {
     review.decide({ candidate: 1, kind, label, probability: 0.8, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
   }
+  assert.throws(() => review.report({ actor: AGENT }), refused(REFUSED, ["no-triage"]), "triage cannot be recorded once the round is reported");
+  review.decide({ candidate: 1, kind: "finding-triage", label: "needs-judgment", probability: 0.8, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
   const s = review.report({ actor: AGENT }).state;
   const n = next(s);
   assert.equal(n.status, "reported");
@@ -241,6 +244,8 @@ test("verifiers that disagree go to a person; only a person resolves it", () => 
   const done = review.resolveEscalation({ id: item.escalation, decision: "approve", reason: "it is real", actor: HUMAN }).state;
   assert.equal(next(done).status, "complete");
   assert.equal(done.escalations[0].resolution.actor, HUMAN);
+  assert.throws(() => review.dispose({ finding: 1, as: "fixed", actor: AGENT }), refused(FORBIDDEN), "an approved dispute triaged needs-judgment is a person's call");
+  review.dispose({ finding: 1, as: "fixed", actor: HUMAN });
 });
 
 test("a failed run: an agent retries, or only a person accepts the gap, and the report says so", () => {
@@ -424,6 +429,37 @@ test("the round cap: an agent is refused past it, a person can go past it, and v
   assert.equal(next(old.read()).roundsSoFar, 3, "next shows the rounds so far");
 });
 
+test("the round cap counts one v1 round per head: v1 retries at the same head are not rounds", () => {
+  const root = stateRoot();
+  const ref = { repo: "acme/retried", key: "7" };
+  const v1 = legacyV1Path(root, ref);
+  mkdirSync(join(v1, ".."), { recursive: true });
+  // v1 started a round on every run: two reviews of head a, one of head b.
+  const rounds = [{ round: 1, head: "a" }, { round: 2, head: "a" }, { round: 3, head: "b" }];
+  writeFileSync(v1, JSON.stringify({ schema: "scalvert.review/v1", repo: ref.repo, key: ref.key, rounds, findings: [] }));
+  const old = openReview(root, ref);
+  importLegacyV1(old.log, ref, v1);
+  assert.equal(next(old.read()).roundsSoFar, 2);
+  const fresh = gitRepo({ version: 1 });
+  const s = old.start({ git: fresh.adapter, targetRef: "main", head: "feature", actor: AGENT }).state;
+  assert.equal(s.rounds[1].pastCap, false, "two reviewed heads leave room under the default cap of 3");
+  assert.equal(s.legacy[0].rounds, 3, "the imported round count is unchanged");
+  assert.deepEqual(Object.keys(publicState(s).legacy[0]).sort(), ["digest", "findings", "path", "rounds", "seq"], "status shows a v1 entry in its old shape");
+  assert.equal(publicState(s).legacy[0].rounds, 3);
+});
+
+test("a confirmed finding needs a triage before the report", () => {
+  const { review, head } = setup({ version: 1 });
+  happyPanel(review, head);
+  for (const [kind, label] of [["finding-verification", "confirmed"], ["finding-severity", "should-fix"], ["finding-origin", "introduced"]]) {
+    review.decide({ candidate: 1, kind, label, probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  }
+  review.decide({ candidate: 2, kind: "finding-verification", label: "refuted", probability: 0.1, rationale: "r", verifier: { model: OPUS }, head, actor: AGENT });
+  assert.throws(() => review.report({ actor: AGENT }), refused(REFUSED, ["no-triage"]));
+  review.decide({ candidate: 1, kind: "finding-triage", label: "agent-fixable", probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  assert.equal(next(review.report({ actor: AGENT }).state).status, "complete");
+});
+
 test("the round cap counts new code: a restart because the target's policy changed is not a round", () => {
   const { repo, review } = setup({ version: 1, review: { maxRounds: 2 } });
   repo.write("src/a.js", "two\n");
@@ -517,7 +553,7 @@ test("a dispute raised by 0.2, whose message names a key, is shown with the find
   v(1, GPT, "refuted");
   v(2, OPUS, "confirmed");
   v(2, SONNET, "refuted");
-  for (const kind of ["finding-severity", "finding-origin"]) review.decide({ candidate: 2, kind, label: kind === "finding-severity" ? "should-fix" : "introduced", probability: 0.8, rationale: "r", verifier: { model: OPUS }, head: repo.head, actor: AGENT });
+  for (const [kind, label] of [["finding-severity", "should-fix"], ["finding-origin", "introduced"], ["finding-triage", "agent-fixable"]]) review.decide({ candidate: 2, kind, label, probability: 0.8, rationale: "r", verifier: { model: OPUS }, head: repo.head, actor: AGENT });
   review.report({ actor: AGENT });
   // The log as 0.2 wrote it: no numbers, and the message 0.2 wrote.
   const old = openLog(root, REF).read().events.map((e) => {
@@ -545,7 +581,7 @@ test("no output names a finding by its internal key", () => {
   const v = (label, model) => review.decide({ candidate: 1, kind: "finding-verification", label, probability: 0.9, rationale: "r", verifier: { model }, head, actor: AGENT });
   v("confirmed", GPT);
   v("refuted", SONNET);
-  for (const kind of ["finding-severity", "finding-origin"]) review.decide({ candidate: 1, kind, label: kind === "finding-severity" ? "blocker" : "introduced", probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
+  for (const [kind, label] of [["finding-severity", "blocker"], ["finding-origin", "introduced"], ["finding-triage", "agent-fixable"]]) review.decide({ candidate: 1, kind, label, probability: 0.9, rationale: "r", verifier: { model: GPT }, head, actor: AGENT });
   const s = review.report({ actor: AGENT }).state;
   for (const out of [next(s), publicState(s), inbox([{ ref: REF, state: s }])]) assert.doesNotMatch(JSON.stringify(out), key);
   assert.equal(publicState(s).findings[1].duplicateOf, 1, "a duplicate points at its primary's candidate number");

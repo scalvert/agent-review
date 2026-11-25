@@ -9,6 +9,9 @@ Each review gets a work directory for its scratch files. Leases say who is using
 - `agent-review gc` removes the `done` and `idle` ones: merged or closed pull requests after a day without changes, and anything idle for `--idle-days` (default 30). It is a dry run unless `--apply`, which needs an actor. A leased directory, or one with uncommitted, untracked, unpushed or stashed git work, is never removed. Each removal assesses the directory again under the review's lock. Events and snapshots are never removed.
 - A directory that `gc --apply` cannot remove is reported as `failed`, with the error, and may be partly removed; its leases stay. The other directories are still removed, the whole result is printed, and the command exits 1 with `store/remove-failed`.
 - `reviewPaths()` returns `work`. New exports: `workdir`, `releaseWorkdir`, `readLeases`, `pruneLeases`, `scanWorkdir`, `assessWorkdir`, `planGc`, `applyGc`, `LEASE_SCHEMA`, `DEFAULT_LEASE_MS`, `MAX_LEASE_MS`, `DEFAULT_IDLE_DAYS`, `CLOSED_GRACE_DAYS` and `WORKDIR_STATUSES`, plus `repoWorkState` from the git adapter and `pullState` from the GitHub adapter.
+- `review report` refuses with the new reason code `no-triage` while a confirmed or disputed candidate has no `finding-triage` decision. 0.3.0 reported it, and then no triage could be recorded, so a `needs-judgment` call could never be made on it. `review next` asks for triage on disputed candidates as well as confirmed ones.
+- The round cap counts imported v1 rounds once per head: a v1 retry at a head v1 had already reviewed is not a round. A v1 round with no recorded head still counts on its own.
+- `review next` shows `roundsSoFar` with the same count, so a v1 ledger with two rounds at one head and one at another shows 2 where 0.3.0 showed 3. `legacy[].rounds` in `review status` still holds the raw v1 round count.
 
 ## 0.3.0
 
