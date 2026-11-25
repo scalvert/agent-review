@@ -38,7 +38,7 @@ export function reviewPaths(root, ref) {
   const { repo, key } = checkRef(ref);
   const [owner, name] = repo.split("/");
   const dir = join(root, "v2", owner, name, keyFile(key));
-  return { dir, log: join(dir, "events.jsonl"), snapshot: join(dir, "snapshot.json"), lock: join(dir, "lock") };
+  return { dir, log: join(dir, "events.jsonl"), snapshot: join(dir, "snapshot.json"), lock: join(dir, "lock"), work: join(dir, "work") };
 }
 
 // Every v2 review under a state root, as { repo, key }.
