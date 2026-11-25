@@ -96,6 +96,8 @@ A directory is `protected` when:
 
 `applyGc(root, plan)` (`agent-review gc --apply`) removes what the plan marked removable. `gc` without `--apply` is a dry run. For each directory it holds the review's lock and assesses it again, with the host state from the plan. A directory that gained a lease, changed since the plan, now holds git work, or resolves outside the state root is kept with the new reasons. Holding the lock means no lease can be taken between the check and the removal.
 
+A directory that cannot be removed, for example because of a permission error, has status `failed`, `removed: false` and one reason with code `remove-failed` and the error's `code` and `message`. It may be partly removed, and its leases are left alone. The run goes on to the next directory, and the `removed` total counts only the directories that went. `agent-review gc --apply` prints the whole result, then exits 1 with the error `store/remove-failed` on stderr.
+
 It removes `work/` and the leases that no longer count. `events.jsonl` and `snapshot.json` are never removed, so a collected review keeps its whole history.
 
 A process that never asks for a lease, such as a person in a terminal, is not seen. The workflow status and idle time still apply, and git work is still protected.

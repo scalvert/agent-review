@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLOSED_GRACE_DAYS, INVALID, applyGc, openReview, planGc, readLeases, releaseWorkdir, reviewPaths, workdir } from "../src/index.mjs";
@@ -319,6 +319,46 @@ test("a work directory that is a link is never walked or removed", () => {
   assert.ok(existsSync(join(outside, "keep.txt")));
 });
 
+// Three removable directories, in plan order 1, 2, 3 (largest first). The
+// second holds a read-only directory with a file in it, so removing it fails
+// part way. undo() restores the mode so the temporary directory can go.
+function threeWithOneStuck(state) {
+  const one = review(state, "1");
+  writeFileSync(join(one.path, "big.bin"), "x".repeat(65536));
+  const two = review(state, "2");
+  const stuck = join(two.path, "ro");
+  mkdirSync(stuck);
+  writeFileSync(join(stuck, "held.txt"), "x".repeat(4096));
+  chmodSync(stuck, 0o555);
+  const three = review(state, "3", { file: null });
+  return { one, two, three, stuck, undo: () => chmodSync(stuck, 0o755) };
+}
+const rootUser = process.getuid?.() === 0;
+
+test("apply: a directory that cannot be removed is reported as failed, and the others still go", { skip: rootUser && "root can remove a read-only directory" }, (t) => {
+  const state = root();
+  const { one, two, three, stuck, undo } = threeWithOneStuck(state);
+  t.after(undo);
+  const plan = planGc(state, { idleDays: 0, now: later(1) });
+  assert.deepEqual(plan.items.map((i) => [i.key, i.removable]), [["1", true], ["2", true], ["3", true]]);
+
+  const done = applyGc(state, plan, { now: later(1) });
+  const k = byKey(done);
+  assert.deepEqual(done.items.map((i) => [i.key, i.status, i.removed]), [["1", "idle", true], ["2", "failed", false], ["3", "idle", true]]);
+  assert.equal(k["2"].removable, false);
+  assert.equal(k["2"].reasons.length, 1);
+  assert.equal(k["2"].reasons[0].code, "remove-failed");
+  assert.match(k["2"].reasons[0].error.code, /^(EACCES|EPERM|ENOTEMPTY)$/);
+  assert.match(k["2"].reasons[0].message, /may be partly removed/);
+  assert.equal(done.bytes.removed, k["1"].bytes + k["3"].bytes, "the removed total covers only the removed ones");
+  assert.ok(!existsSync(one.path));
+  assert.ok(!existsSync(three.path));
+  assert.ok(existsSync(join(stuck, "held.txt")));
+  assert.deepEqual(readdirSync(join(two.paths.dir, "leases")), [`${two.lease.id}.json`], "the failed directory's leases are left alone");
+  assert.deepEqual(readdirSync(join(one.paths.dir, "leases")), []);
+  assert.deepEqual(readdirSync(join(three.paths.dir, "leases")), []);
+});
+
 test("plan: --repo narrows it, and idleDays must be a whole number", () => {
   const state = root();
   review(state, "1");
@@ -387,4 +427,27 @@ test("the command line: a lease, workdirs, release, a dry run, and --apply with 
   assert.deepEqual([applied.json.applied, applied.json.actor, applied.json.items[0].removed], [true, "human:steve", true]);
   assert.ok(!existsSync(wd.json.path));
   assert.ok(existsSync(reviewPaths(state, { repo: "acme/widgets", key: "7" }).log));
+});
+
+test("the command line: gc --apply prints every directory and exits 1 when one could not be removed", { skip: rootUser && "root can remove a read-only directory" }, (t) => {
+  const state = root();
+  const dirs = threeWithOneStuck(state);
+  t.after(dirs.undo);
+  for (const d of [dirs.one, dirs.two, dirs.three]) releaseWorkdir(state, d.ref, { lease: d.lease.id, actor: AGENT });
+
+  const r = cli(state, ["gc", "--offline", "--idle-days", "0", "--apply"], { actor: "human:steve" });
+  assert.equal(r.status, 1, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(out.items.map((i) => [i.key, i.status, i.removed]), [["1", "idle", true], ["2", "failed", false], ["3", "idle", true]]);
+  const err = JSON.parse(r.stderr).error;
+  assert.equal(err.code, "store/remove-failed");
+  assert.deepEqual(err.reasons.map((x) => [x.code, x.path]), [["remove-failed", dirs.two.path]]);
+  assert.ok(!existsSync(dirs.one.path));
+  assert.ok(!existsSync(dirs.three.path));
+
+  // Text output lists the failure with the others.
+  const again = cli(state, ["gc", "--offline", "--idle-days", "0", "--apply"], { actor: "human:steve", text: true });
+  assert.equal(again.status, 1);
+  assert.match(again.stdout, /^removed 0 work directories, 0 B; 1 failed\n  failed +acme\/widgets 2 .*may be partly removed/);
+  assert.match(again.stderr, /could not be removed/);
 });

@@ -125,6 +125,10 @@ const sum = (items) => items.reduce((n, i) => n + i.bytes, 0);
 // plan. One that is no longer removable, or that changed since the plan, is
 // kept with the new reasons. Holding the lock means no lease can be taken
 // between the check and the removal.
+//
+// A directory that cannot be removed is reported as failed, with the error,
+// and its leases are left alone. It may be partly removed. The run goes on
+// to the next directory, so one failure never hides the others' results.
 export function applyGc(root, plan, { now = Date.now(), checkRepo = () => [] } = {}) {
   const realRoot = realpathSync(root);
   const items = plan.items.map((item) => {
@@ -151,7 +155,8 @@ export function applyGc(root, plan, { now = Date.now(), checkRepo = () => [] } =
     } catch (e) {
       if (e.code === BUSY) return kept(null, "locked", "a writer holds the review's lock");
       if (e.code === "ENOENT") return { ...item, removed: true, reasons: [...item.reasons, { code: "gone", message: "already removed" }] };
-      throw e;
+      const error = { code: e.code ?? null, message: String(e.message ?? e).split("\n")[0] };
+      return { ...item, status: "failed", removable: false, removed: false, reasons: [{ code: "remove-failed", error, message: `removing it failed (${error.code ?? "error"}): ${error.message}; it may be partly removed` }] };
     }
   });
   return { idleDays: plan.idleDays, items, bytes: { removed: sum(items.filter((i) => i.removed)), kept: sum(items.filter((i) => !i.removed)) } };

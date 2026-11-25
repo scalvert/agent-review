@@ -80,8 +80,9 @@ const line = (verb, i) => `  ${verb.padEnd(9)} ${i.repo} ${i.key}  ${bytes(i.byt
 export function renderGc(g) {
   if (!g.items.length) return "No review has a work directory.";
   const gone = g.items.filter((i) => (g.applied ? i.removed : i.removable));
+  const failed = g.applied ? g.items.filter((i) => i.status === "failed").length : 0;
   const head = g.applied
-    ? `removed ${dirs(gone.length)}, ${bytes(g.bytes.removed)}`
+    ? `removed ${dirs(gone.length)}, ${bytes(g.bytes.removed)}${failed ? `; ${failed} failed` : ""}`
     : `would remove ${dirs(gone.length)}, ${bytes(g.bytes.removable)} (dry run; --apply removes them)`;
   const verb = (i) => (g.applied ? (i.removed ? "removed" : i.status) : i.removable ? "remove" : i.status);
   return [head, ...g.items.map((i) => line(verb(i), i))].join("\n");

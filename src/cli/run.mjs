@@ -238,6 +238,17 @@ const COMMANDS = {
       if (!o.apply) return { applied: false, ...plan };
       return { applied: true, actor, ...applyGc(h.root(), plan, { checkRepo: repoWorkState }) };
     },
+    // The whole result is printed either way; a directory that could not be
+    // removed makes the run fail after it.
+    failure: (out) => {
+      const failed = out.applied ? out.items.filter((i) => i.status === "failed") : [];
+      if (!failed.length) return null;
+      return {
+        code: "store/remove-failed",
+        message: `${failed.length} work ${failed.length === 1 ? "directory" : "directories"} could not be removed`,
+        reasons: failed.map((i) => ({ ...i.reasons[0], path: i.path })),
+      };
+    },
   },
   "policy check": {
     summary: "Validate a policy file, or show the trusted policy for a target ref.",
@@ -390,6 +401,11 @@ export function main(argv, { env = process.env, stdout = process.stdout, stderr 
         : JSON.stringify(out, null, 2);
       stdout.write(`${text}\n`);
     } else stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+    const failure = cmd.failure?.(out);
+    if (failure) {
+      stderr.write(textOut ? `${renderError(failure)}\n` : `${JSON.stringify({ error: failure }, null, 2)}\n`);
+      return 1;
+    }
     return 0;
   } catch (e) {
     if (e instanceof UsageError) {
