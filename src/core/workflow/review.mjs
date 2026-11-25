@@ -403,10 +403,13 @@ export function openReview(root, ref, { familyOf = defaultFamily } = {}) {
       }
       const labels = new Set(v.map((x) => x.label));
       if (labels.size > 1) {
-        // A person settles the dispute, so the finding needs its severity and
-        // origin first: if they say it is real, those decide what it blocks.
+        // A person settles the dispute, so the finding needs its severity,
+        // origin and triage first: if they say it is real, those decide what
+        // it blocks and who acts on it, and no decision can be recorded once
+        // the round is reported.
         if (!f.decisions["finding-severity"]?.length) missing.push(reason("no-severity", `candidate ${f.candidate} is disputed and has no severity; rate it so a person can settle it`, c));
         if (!f.decisions["finding-origin"]?.length) missing.push(reason("no-origin", `candidate ${f.candidate} is disputed and has no origin`, c));
+        if (!f.decisions["finding-triage"]?.length) missing.push(reason("no-triage", `candidate ${f.candidate} is disputed and has no triage`, c));
         escalate.push({ finding: f.id, code: "verifiers-disagree", verdicts: v.map((x) => `${x.verifier.model}: ${x.label}`).join(", ") });
         continue;
       }

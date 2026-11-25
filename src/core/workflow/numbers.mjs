@@ -66,5 +66,8 @@ export function publicState(state) {
   for (const r of Object.values(s.rounds)) r.report = publicReport(state, state.rounds[r.round].report);
   s.findings = s.findings.map(({ id, duplicateOf, ...f }) => ({ ...f, duplicateOf: duplicateOf ? by.get(duplicateOf).candidate : null }));
   s.escalations = s.escalations.map((x) => ({ ...x, finding: x.finding ? by.get(x.finding).number : null }));
+  // A v1 entry's reviews is internal, the count the round cap uses. Status
+  // shows the imported entry without it, in the shape it has always had.
+  s.legacy = s.legacy.map(({ reviews, ...l }) => l);
   return s;
 }

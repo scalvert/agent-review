@@ -76,11 +76,11 @@ export function next(state) {
       const v = f.decisions["finding-verification"];
       const confirmed = v.every((x) => x.label === "confirmed") && Math.min(...v.map((x) => x.probability)) >= policy.thresholds.report;
       // A disputed finding goes to a person, who needs its severity and
-      // origin to see what it would block.
+      // origin to see what it would block. It is triaged too, in case the
+      // person says it is real.
       const disputed = new Set(v.map((x) => x.label)).size > 1;
       if (!confirmed && !disputed) continue;
-      const wanted = disputed ? ["finding-severity", "finding-origin"] : ["finding-severity", "finding-origin", "finding-triage"];
-      const kinds = wanted.filter((k) => !f.decisions[k]?.length);
+      const kinds = ["finding-severity", "finding-origin", "finding-triage"].filter((k) => !f.decisions[k]?.length);
       if (kinds.length) decide.push({ ...candidate(f), kinds, author: f.author, verifierMust: policy.independence.verifier === "family" ? { notFamily: f.author.family } : { notModel: f.author.model } });
       if (disputed) continue;
       if (f.decisions["finding-severity"]?.at(-1)?.label === "blocker" && policy.independence.secondVerifierForBlockers && new Set(v.map((x) => x.verifier.model)).size < 2) {
